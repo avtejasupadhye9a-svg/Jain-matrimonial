@@ -33,4 +33,3 @@ CREATE TABLE jm_outbox (
   created_at TEXT NOT NULL, processed_at TEXT
 );
 CREATE INDEX jm_outbox_pending ON jm_outbox(created_at,id) WHERE processed_at IS NULL;
-

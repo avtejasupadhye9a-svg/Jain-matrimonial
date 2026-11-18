@@ -63,5 +63,3 @@ def sync_one(file_id, staging: TemporaryStorage, permanent: PermanentStorage, jo
     elif permanent.metadata(file_id)["sha256"] != checksum:
         raise ValueError("Permanent copy cannot be confirmed")
     staging.delete_if_checksum(file_id, checksum)
-
-

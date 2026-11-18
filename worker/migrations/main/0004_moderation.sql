@@ -12,4 +12,3 @@ CREATE TRIGGER jm_moderation_audit AFTER INSERT ON jm_moderation_actions BEGIN
 END;
 ALTER TABLE jm_privacy_requests ADD COLUMN closed_by TEXT REFERENCES jm_accounts(id);
 ALTER TABLE jm_privacy_requests ADD COLUMN closed_at TEXT;
-

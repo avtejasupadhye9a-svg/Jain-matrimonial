@@ -73,4 +73,3 @@ CREATE TRIGGER jm_claim_requested AFTER INSERT ON jm_claims BEGIN
   INSERT INTO jm_outbox(id,actor_id,entity_id,action,created_at)
     VALUES(NEW.id || ':request',NEW.account_id,NEW.profile_id,'claim.requested',NEW.created_at);
 END;
-

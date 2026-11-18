@@ -19,4 +19,3 @@ CREATE TABLE jm_storage_jobs (
     CHECK(state IN ('queued','copying','confirmed','retry','retired')),
   attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER, last_error TEXT, confirmed_at TEXT
 );
-

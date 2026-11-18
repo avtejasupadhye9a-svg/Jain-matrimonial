@@ -74,4 +74,3 @@ WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
   INSERT INTO jm_consent_events VALUES(lower(hex(randomblob(16))),NEW.interest_id,NEW.account_id,NEW.scope,
     CASE WHEN NEW.revoked_at IS NULL THEN 'granted' ELSE 'revoked' END,COALESCE(NEW.revoked_at,NEW.granted_at));
 END;
-

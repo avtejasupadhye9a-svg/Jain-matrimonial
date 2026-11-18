@@ -26,6 +26,3 @@ migrations_table = "jm_migrations"
 
 [triggers]
 crons = ["*/5 * * * *"]
-
-
-

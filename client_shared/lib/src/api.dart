@@ -1,0 +1,277 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+typedef Json = Map<String, dynamic>;
+const apiBase = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://jain-matrimonial-api.avtejasupadhye-9a.workers.dev',
+);
+
+Json asJson(Object? value) => Map<String, dynamic>.from(value as Map);
+List<Json> items(Json value) => (value['items'] as List).map(asJson).toList();
+String label(Object? value) => (value?.toString() ?? '').replaceAll('_', ' ');
+
+class ApiError implements Exception {
+  const ApiError(this.status, this.message, this.fields);
+  final int status;
+  final String message;
+  final Json fields;
+
+  @override
+  String toString() => fields.isEmpty
+      ? message
+      : '$message ${fields.entries.map((e) => '${e.key}: ${e.value}').join(' ')}';
+}
+
+class Account {
+  const Account(this.id, this.role, this.email);
+  factory Account.fromJson(Json json) => Account(
+    json['id'] as String,
+    json['role'] as String,
+    json['email'] as String,
+  );
+  final String id;
+  final String role;
+  final String email;
+}
+
+class Candidate {
+  const Candidate(this.id, this.values);
+  factory Candidate.fromJson(Json json) =>
+      Candidate(json['id'] as String, json);
+  final String id;
+  final Json values;
+
+  String get title => '${values['age']} years · ${values['city']}';
+  String get summary => [
+    values['occupation'],
+    values['qualification'],
+    values['tradition'],
+  ].whereType<String>().join(' · ');
+}
+
+class Draft {
+  const Draft(this.id, this.version, this.data, this.record);
+  factory Draft.fromJson(Json json) => Draft(
+    json['id'] as String,
+    json['version'] as int,
+    asJson(json['data']),
+    json,
+  );
+  final String id;
+  final int version;
+  final Json data;
+  final Json record;
+}
+
+class Api extends ChangeNotifier {
+  Api({String base = apiBase, FlutterSecureStorage? storage})
+    : origin = Uri.parse(base),
+      _storage = storage ?? const FlutterSecureStorage() {
+    if (origin.scheme != 'https' && !localDebug) {
+      throw ArgumentError('HTTPS is required for the Worker API');
+    }
+  }
+
+  final Uri origin;
+  final FlutterSecureStorage _storage;
+  final HttpClient _http = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 12);
+  final Random _random = Random.secure();
+  static const _refreshKey = 'jain-matrimonial-refresh';
+  String? _access;
+  String? _refresh;
+  Future<void>? _rotation;
+  Account? account;
+  String fixtureKey = '';
+
+  bool get localDebug =>
+      kDebugMode && ['localhost', '127.0.0.1'].contains(origin.host);
+
+  Future<void> restore() async {
+    _refresh = await _storage.read(key: _refreshKey);
+    if (_refresh == null) return;
+    try {
+      await _rotate();
+      account = Account.fromJson(await get('/me'));
+      notifyListeners();
+    } on ApiError catch (error) {
+      if (error.status == 401) await clear();
+      if (error.status != 401) rethrow;
+    }
+  }
+
+  Future<Json> requestCode(String email) =>
+      post('/auth/otp/request', {'email': email}, authenticated: false);
+
+  Future<void> signIn(
+    String challengeId,
+    String code,
+    String expectedRole,
+  ) async {
+    final data = await post('/auth/otp/verify', {
+      'challengeId': challengeId,
+      'code': code,
+    }, authenticated: false);
+    final found = Account.fromJson(asJson(data['account']));
+    if (found.role != expectedRole) {
+      await _send(
+        'POST',
+        '/auth/logout',
+        {},
+        token: data['accessToken'] as String,
+      );
+      throw const ApiError(
+        403,
+        'This account cannot use this application.',
+        {},
+      );
+    }
+    await _acceptTokens(data);
+    account = found;
+    notifyListeners();
+  }
+
+  Future<void> _acceptTokens(Json data) async {
+    final refresh = data['refreshToken'] as String;
+    await _storage.write(key: _refreshKey, value: refresh);
+    _refresh = refresh;
+    _access = data['accessToken'] as String;
+  }
+
+  Future<void> _rotate() async {
+    final running = _rotation;
+    if (running != null) return running;
+    final refresh = _refresh;
+    if (refresh == null) throw const ApiError(401, 'Sign in to continue.', {});
+    final future = () async {
+      final tokens = await _send('POST', '/auth/refresh', {
+        'refreshToken': refresh,
+      });
+      await _acceptTokens(tokens);
+    }();
+    _rotation = future;
+    try {
+      await future;
+    } finally {
+      _rotation = null;
+    }
+  }
+
+  Future<void> clear() async {
+    _access = null;
+    _refresh = null;
+    account = null;
+    await _storage.delete(key: _refreshKey);
+    notifyListeners();
+  }
+
+  Future<void> logout() async {
+    try {
+      await post('/auth/logout', {});
+    } finally {
+      await clear();
+    }
+  }
+
+  Future<Json> get(String path) => call('GET', path);
+  Future<Json> post(String path, Json data, {bool authenticated = true}) =>
+      call('POST', path, data, authenticated);
+  Future<Json> put(String path, Json data) => call('PUT', path, data);
+  Future<Json> delete(String path) => call('DELETE', path);
+  String query(String route, Json data) => Uri(
+    path: route,
+    queryParameters: {
+      for (final e in data.entries)
+        if (e.value != null && e.value.toString().isNotEmpty)
+          e.key: e.value.toString(),
+    },
+  ).toString();
+
+  Future<Json> call(
+    String method,
+    String path, [
+    Json? data,
+    bool authenticated = true,
+  ]) async {
+    final key = method == 'GET'
+        ? null
+        : List.generate(
+            24,
+            (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+          ).join();
+    final token = authenticated ? _access : null;
+    try {
+      return await _send(method, path, data, token: token, key: key);
+    } on ApiError catch (error) {
+      if (error.status != 401 || !authenticated || _refresh == null) rethrow;
+      try {
+        if (_access == token) await _rotate();
+      } on ApiError catch (refreshError) {
+        if (refreshError.status == 401) await clear();
+        rethrow;
+      }
+      return _send(method, path, data, token: _access, key: key);
+    }
+  }
+
+  Future<Json> _send(
+    String method,
+    String path,
+    Json? data, {
+    String? token,
+    String? key,
+  }) async {
+    final uri = origin.resolve(path);
+    if (uri.origin != origin.origin)
+      throw ArgumentError('API paths must stay on the configured origin');
+    try {
+      final request = await _http.openUrl(method, uri);
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (token != null)
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      if (key != null) request.headers.set('Idempotency-Key', key);
+      if (localDebug && fixtureKey.isNotEmpty)
+        request.headers.set('x-local-fixture-key', fixtureKey);
+      if (data != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(jsonEncode(data));
+      }
+      final response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
+      final raw = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 20));
+      final json = asJson(jsonDecode(raw));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw ApiError(
+          response.statusCode,
+          json['message']?.toString() ?? 'Request failed.',
+          json['fields'] is Map ? asJson(json['fields']) : {},
+        );
+      }
+      return json['data'] is Map ? asJson(json['data']) : {};
+    } on ApiError {
+      rethrow;
+    } catch (_) {
+      throw const ApiError(
+        0,
+        'The service could not be reached. Try again.',
+        {},
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _http.close(force: true);
+    super.dispose();
+  }
+}
