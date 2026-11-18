@@ -7,6 +7,7 @@ export interface Env {
   BREVO_SENDER_NAME?: string;
   ALLOWED_ORIGINS?: string;
   ACTIVE_PROFILE_LIMIT?: string;
+  DISCOVERY_DETAILS?: string;
   JAIN_LOCAL_TEST?: string;
   LOCAL_FIXTURE_KEY?: string;
   FILE_TRANSFER_ENABLED?: string;
@@ -21,7 +22,12 @@ export interface Actor {
 }
 
 export class Failure extends Error {
-  constructor(public status: number, public code: string, message: string, public fields?: Record<string, string>) {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public fields?: Record<string, string>,
+  ) {
     super(message);
   }
 }
@@ -33,10 +39,22 @@ export const unix = () => Math.floor(Date.now() / 1000);
 export const invalid = (field: string, message: string): never => {
   throw new Failure(400, 'invalid_input', 'Check the submitted fields.', { [field]: message });
 };
-export const conflict = (): never => { throw new Failure(409, 'conflict', 'The record changed or the action is unavailable. Refresh and try again.'); };
-export const missing = (): never => { throw new Failure(404, 'not_found', 'The requested record is unavailable.'); };
-export const forbidden = (): never => { throw new Failure(403, 'forbidden', 'You do not have permission for this action.'); };
-export const unauthorized = (): never => { throw new Failure(401, 'unauthenticated', 'Sign in to continue.'); };
+export const conflict = (): never => {
+  throw new Failure(
+    409,
+    'conflict',
+    'The record changed or the action is unavailable. Refresh and try again.',
+  );
+};
+export const missing = (): never => {
+  throw new Failure(404, 'not_found', 'The requested record is unavailable.');
+};
+export const forbidden = (): never => {
+  throw new Failure(403, 'forbidden', 'You do not have permission for this action.');
+};
+export const unauthorized = (): never => {
+  throw new Failure(401, 'unauthenticated', 'Sign in to continue.');
+};
 
 export function object(value: unknown): JsonObject {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as JsonObject;
@@ -73,7 +91,11 @@ export async function body(request: Request): Promise<JsonObject> {
 export function str(value: unknown, field: string, max = 120, min = 1): string {
   if (typeof value !== 'string') return invalid(field, 'Expected text.');
   const cleaned = value.normalize('NFC').trim();
-  if (cleaned.length < min || cleaned.length > max || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(cleaned)) {
+  if (
+    cleaned.length < min ||
+    cleaned.length > max ||
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(cleaned)
+  ) {
     return invalid(field, 'Enter text within the allowed length.');
   }
   return cleaned;
@@ -96,13 +118,19 @@ export function bool(value: unknown, field: string): boolean {
 
 export function email(value: unknown): string {
   const address = str(value, 'email', 254).toLowerCase();
-  if (!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(address)) return invalid('email', 'Enter a valid email address.');
+  if (
+    !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(
+      address,
+    )
+  )
+    return invalid('email', 'Enter a valid email address.');
   return address;
 }
 
 export function identifier(value: unknown, field = 'id'): string {
   const id = str(value, field, 36);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return invalid(field, 'Enter a valid ID.');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
+    return invalid(field, 'Enter a valid ID.');
   return id;
 }
 
@@ -120,8 +148,13 @@ export async function change(db: D1Database, sql: string, ...values: unknown[]):
 
 export async function rate(db: D1Database, bucket: string, limit: number, interval: number) {
   const window = Math.floor(unix() / interval);
-  const row = await statement(db, 'INSERT INTO jm_rate VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=CASE WHEN jm_rate.window=excluded.window THEN jm_rate.count+1 ELSE 1 END WHERE jm_rate.window<>excluded.window OR jm_rate.count<? RETURNING count',
-    bucket, window, limit).first();
+  const row = await statement(
+    db,
+    'INSERT INTO jm_rate VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=CASE WHEN jm_rate.window=excluded.window THEN jm_rate.count+1 ELSE 1 END WHERE jm_rate.window<>excluded.window OR jm_rate.count<? RETURNING count',
+    bucket,
+    window,
+    limit,
+  ).first();
   if (!row) throw new Failure(429, 'rate_limited', 'Please wait before trying again.');
 }
 
@@ -131,18 +164,27 @@ export function profileLimit(env: Env): number {
 }
 
 const utf8 = new TextEncoder();
-const hex = (data: ArrayBuffer | Uint8Array) => [...new Uint8Array(data)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+const hex = (data: ArrayBuffer | Uint8Array) =>
+  [...new Uint8Array(data)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 export const randomToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 export const digest = async (text: string) => hex(await crypto.subtle.digest('SHA-256', utf8.encode(text)));
 export async function keyed(env: Env, text: string) {
-  if (!env.AUTH_SECRET || env.AUTH_SECRET.length < 32) throw new Failure(503, 'auth_unavailable', 'Authentication is temporarily unavailable.');
-  const key = await crypto.subtle.importKey('raw', utf8.encode(env.AUTH_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  if (!env.AUTH_SECRET || env.AUTH_SECRET.length < 32)
+    throw new Failure(503, 'auth_unavailable', 'Authentication is temporarily unavailable.');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    utf8.encode(env.AUTH_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
   return hex(await crypto.subtle.sign('HMAC', key, utf8.encode(text)));
 }
 
 export function same(a: string, b: string): boolean {
   let diff = a.length ^ b.length;
-  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i++)
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   return diff === 0;
 }
 
@@ -159,7 +201,13 @@ export function listing<T>(items: T[], limit: number, offset: number) {
 }
 
 export function audit(db: D1Database, actor: Actor, entity: string, action: string) {
-  return statement(db, 'INSERT INTO jm_outbox(id,actor_id,entity_id,action,created_at) VALUES(?,?,?,?,?)', uid(), actor.id, entity, action, now());
+  return statement(
+    db,
+    'INSERT INTO jm_outbox(id,actor_id,entity_id,action,created_at) VALUES(?,?,?,?,?)',
+    uid(),
+    actor.id,
+    entity,
+    action,
+    now(),
+  );
 }
-
-

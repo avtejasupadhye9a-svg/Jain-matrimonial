@@ -22,3 +22,8 @@ local-data/
 *.exe
 __pycache__/
 
+
+.idea/
+*.iml
+.cxx/
+.local/

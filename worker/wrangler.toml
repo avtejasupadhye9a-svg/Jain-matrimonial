@@ -6,6 +6,7 @@ compatibility_date = "2026-11-18"
 [vars]
 BREVO_SENDER_NAME = "Jain Matrimonial"
 ACTIVE_PROFILE_LIMIT = "1"
+DISCOVERY_DETAILS = "true"
 FILE_TRANSFER_ENABLED = "false"
 PUSH_ENABLED = "false"
 
@@ -14,13 +15,17 @@ binding = "DB_MAIN"
 database_name = "jain-matrimonial-main"
 database_id = "c77618b5-fcc1-47cc-99d3-98cfc0043d67"
 migrations_dir = "migrations/main"
+migrations_table = "jm_migrations"
 
 [[d1_databases]]
 binding = "DB_OPERATIONS"
 database_name = "jain-matrimonial-operations"
 database_id = "891dce8d-20a8-479b-8af6-5548d7c5e6b4"
 migrations_dir = "migrations/operations"
+migrations_table = "jm_migrations"
 
 [triggers]
 crons = ["*/5 * * * *"]
+
+
 
