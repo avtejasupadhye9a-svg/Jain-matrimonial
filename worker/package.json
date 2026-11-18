@@ -1,0 +1,20 @@
+{
+  "name": "jain-matrimonial-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "dev": "wrangler dev --local --port 8787",
+    "migrate:local": "wrangler d1 migrations apply DB_MAIN --local && wrangler d1 migrations apply DB_OPERATIONS --local",
+    "test": "node --test test/*.test.mjs",
+    "build": "wrangler deploy --dry-run --outdir .wrangler/bundle"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261118.1",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261117.0-beta",
+    "typescript": "5.9.3",
+    "wrangler": "4.164.0"
+  }
+}

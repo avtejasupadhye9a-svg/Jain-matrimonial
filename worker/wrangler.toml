@@ -1,0 +1,26 @@
+name = "jain-matrimonial-api"
+main = "src/index.ts"
+account_id = "b41fb39745bd9230d4333b6f905675c4"
+compatibility_date = "2026-11-18"
+
+[vars]
+BREVO_SENDER_NAME = "Jain Matrimonial"
+ACTIVE_PROFILE_LIMIT = "1"
+FILE_TRANSFER_ENABLED = "false"
+PUSH_ENABLED = "false"
+
+[[d1_databases]]
+binding = "DB_MAIN"
+database_name = "jain-matrimonial-main"
+database_id = "c77618b5-fcc1-47cc-99d3-98cfc0043d67"
+migrations_dir = "migrations/main"
+
+[[d1_databases]]
+binding = "DB_OPERATIONS"
+database_name = "jain-matrimonial-operations"
+database_id = "891dce8d-20a8-479b-8af6-5548d7c5e6b4"
+migrations_dir = "migrations/operations"
+
+[triggers]
+crons = ["*/5 * * * *"]
+

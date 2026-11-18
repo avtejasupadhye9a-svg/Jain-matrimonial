@@ -1,0 +1,7 @@
+AUTH_SECRET=replace-with-random-local-secret-at-least-32-characters
+JAIN_LOCAL_TEST=false
+LOCAL_FIXTURE_KEY=
+BREVO_SENDER_EMAIL=
+BREVO_API_KEY=
+ALLOWED_ORIGINS=
+
