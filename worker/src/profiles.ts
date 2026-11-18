@@ -141,6 +141,7 @@ interface DraftRow {
   updatedAt: string;
   visible: number;
   suspended: number;
+  reviewStatus: string;
   consentEvidence?: string | null;
 }
 interface Revision {
@@ -157,7 +158,10 @@ interface Revision {
 }
 
 const draftQuery = `SELECT p.id,d.data,d.version,p.published_id AS publishedId,p.updated_at AS updatedAt,
-  p.visible,p.suspended FROM jm_profiles p JOIN jm_drafts d ON p.id=d.profile_id`;
+  p.visible,p.suspended,COALESCE((
+    SELECT CASE WHEN r.draft_version<d.version AND r.status<>'pending_review' THEN 'draft' ELSE r.status END
+    FROM jm_revisions r WHERE r.profile_id=p.id ORDER BY r.draft_version DESC LIMIT 1
+  ), 'draft') AS reviewStatus FROM jm_profiles p JOIN jm_drafts d ON p.id=d.profile_id`;
 const revisionQuery = `SELECT id,profile_id AS profileId,status,base_id AS baseId,draft_version AS draftVersion,data,reason,
   reviewer,reviewed_at AS reviewedAt,created_at AS createdAt FROM jm_revisions`;
 const ownerExists = `EXISTS(SELECT 1 FROM jm_ownership WHERE profile_id=p.id AND account_id=? AND authority IN ('owner','delegate'))`;

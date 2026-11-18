@@ -45,45 +45,84 @@ class _DiscoverState extends State<Discover> {
   final List<String?> searchPages = [null];
   Api get api => widget.api;
 
-  Future<Json?> filterDialog(Json current) => showDialog<Json>(
-    context: context,
-    builder: (dialog) {
-      final draft = Map<String, dynamic>.of(current);
-      return AlertDialog(
-        title: const Text('Discovery filters'),
-        content: SizedBox(
-          width: 440,
-          child: SingleChildScrollView(
-            child: FieldInputs(
-              fields: searchFields,
-              values: draft,
-              update: (key, value) {
-                if (value == null) {
-                  draft.remove(key);
-                } else {
-                  draft[key] = value;
-                }
-              },
+  Future<Json?> filterDialog(Json current) {
+    final draft = Map<String, dynamic>.of(current);
+    Json errors = {};
+    return showDialog<Json>(
+      context: context,
+      builder: (dialog) => StatefulBuilder(
+        builder: (context, updateDialog) => AlertDialog(
+          title: const Text('Discovery filters'),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: FieldInputs(
+                fields: searchFields,
+                values: draft,
+                errors: errors,
+                update: (key, value) {
+                  if (value == null) {
+                    draft.remove(key);
+                  } else {
+                    draft[key] = value;
+                  }
+                },
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, <String, dynamic>{}),
+              child: const Text('Reset'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialog),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final next = <String, dynamic>{};
+                for (final (suffix, lower, upper) in [
+                  ('Age', 21, 120),
+                  ('Height', 100, 250),
+                ]) {
+                  final min = draft['min$suffix'];
+                  final max = draft['max$suffix'];
+                  for (final (field, value) in [
+                    ('min$suffix', min),
+                    ('max$suffix', max),
+                  ]) {
+                    if (value != null &&
+                        (value is! int || value < lower || value > upper)) {
+                      next[field] = 'Use a whole number from $lower to $upper.';
+                    }
+                  }
+                  if (min is int && max is int && min > max) {
+                    next['max$suffix'] = 'Must be at least the minimum.';
+                  }
+                }
+                final id = draft['id'] as String?;
+                if (id != null &&
+                    !RegExp(
+                      r'^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$',
+                      caseSensitive: false,
+                    ).hasMatch(id)) {
+                  next['id'] = 'Enter a valid profile ID.';
+                }
+                if (next.isNotEmpty) {
+                  updateDialog(() => errors = next);
+                  return;
+                }
+                if (id != null) draft['id'] = id.toLowerCase();
+                Navigator.pop(dialog, draft);
+              },
+              child: const Text('Apply'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog, <String, dynamic>{}),
-            child: const Text('Reset'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialog),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, draft),
-            child: const Text('Apply'),
-          ),
-        ],
-      );
-    },
-  );
+      ),
+    );
+  }
 
   void use(Json filters) => setState(() {
     this.filters = filters;
@@ -315,11 +354,7 @@ class _DiscoverState extends State<Discover> {
           await Navigator.push(
             context,
             MaterialPageRoute<void>(
-              builder: (_) => Detail(
-                api: api,
-                id: candidate.id,
-                favorite: selected == '/favorites',
-              ),
+              builder: (_) => Detail(api: api, id: candidate.id),
             ),
           );
           refresh();
@@ -330,21 +365,15 @@ class _DiscoverState extends State<Discover> {
 }
 
 class Detail extends StatefulWidget {
-  const Detail({
-    super.key,
-    required this.api,
-    required this.id,
-    required this.favorite,
-  });
+  const Detail({super.key, required this.api, required this.id});
   final Api api;
   final String id;
-  final bool favorite;
   @override
   State<Detail> createState() => _DetailState();
 }
 
 class _DetailState extends State<Detail> {
-  late bool favorite = widget.favorite;
+  bool updatingFavorite = false;
   Api get api => widget.api;
   String get id => widget.id;
 
@@ -404,7 +433,8 @@ class _DetailState extends State<Detail> {
     appBar: AppBar(title: const Text('Profile details')),
     body: RemotePanel(
       load: () => api.get('/discover/$id'),
-      builder: (context, data, _) {
+      builder: (context, data, refresh) {
+        final favorite = data['favorite'] == true;
         final candidate = Candidate.fromJson(data);
         return ListView(
           padding: const EdgeInsets.all(20),
@@ -442,14 +472,20 @@ class _DetailState extends State<Detail> {
                   child: const Text('Express interest'),
                 ),
                 OutlinedButton(
-                  onPressed: () => runAction(context, () async {
-                    if (favorite) {
-                      await api.delete('/favorites/$id');
-                    } else {
-                      await api.put('/favorites/$id', {});
-                    }
-                    if (mounted) setState(() => favorite = !favorite);
-                  }),
+                  onPressed: updatingFavorite
+                      ? null
+                      : () async {
+                          setState(() => updatingFavorite = true);
+                          await runAction(context, () async {
+                            if (favorite) {
+                              await api.delete('/favorites/$id');
+                            } else {
+                              await api.put('/favorites/$id', {});
+                            }
+                            refresh();
+                          });
+                          if (mounted) setState(() => updatingFavorite = false);
+                        },
                   child: Text(favorite ? 'Remove favorite' : 'Add favorite'),
                 ),
                 TextButton(

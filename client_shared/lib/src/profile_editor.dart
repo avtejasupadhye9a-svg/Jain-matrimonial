@@ -105,22 +105,34 @@ class FieldInputs extends StatelessWidget {
     required this.fields,
     required this.values,
     required this.update,
+    this.errors = const {},
+    this.requiredKeys = const {},
+    this.enabled = true,
   });
   final List<Field> fields;
   final Json values;
   final void Function(String, Object?) update;
+  final Json errors;
+  final Set<String> requiredKeys;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) => Column(
     children: fields.map((field) {
       final value = values[field.key];
       final options = controls[field.key];
+      final decoration = InputDecoration(
+        labelText: requiredKeys.contains(field.key)
+            ? '${field.label} *'
+            : field.label,
+        errorText: errors[field.key]?.toString(),
+      );
       final child = options != null
           ? DropdownButtonFormField<String>(
               initialValue: options.contains(value?.toString())
                   ? value.toString()
                   : '',
-              decoration: InputDecoration(labelText: field.label),
+              decoration: decoration,
               items: [
                 const DropdownMenuItem(value: '', child: Text('Choose…')),
                 ...options.map(
@@ -130,47 +142,68 @@ class FieldInputs extends StatelessWidget {
                   ),
                 ),
               ],
-              onChanged: (next) {
-                if (next == null || next.isEmpty) {
-                  update(field.key, null);
-                } else {
-                  update(
-                    field.key,
-                    field.key == 'relocate' ? next == 'true' : next,
-                  );
-                }
-              },
+              onChanged: !enabled
+                  ? null
+                  : (next) {
+                      if (next == null || next.isEmpty) {
+                        update(field.key, null);
+                      } else {
+                        update(
+                          field.key,
+                          field.key == 'relocate' ? next == 'true' : next,
+                        );
+                      }
+                    },
             )
           : TextFormField(
+              enabled: enabled,
+              minLines:
+                  const {
+                    'biography',
+                    'familyIntroduction',
+                    'customs',
+                  }.contains(field.key)
+                  ? 3
+                  : 1,
+              maxLines:
+                  const {
+                    'biography',
+                    'familyIntroduction',
+                    'customs',
+                  }.contains(field.key)
+                  ? 6
+                  : 1,
               initialValue: value is List
                   ? value.join(', ')
                   : value?.toString(),
-              decoration: InputDecoration(labelText: field.label),
+              decoration: decoration,
               keyboardType: numeric.contains(field.key)
                   ? TextInputType.number
                   : TextInputType.text,
-              onChanged: (next) {
-                final text = next.trim();
-                if (text.isEmpty) {
-                  update(field.key, null);
-                } else if (field.key == 'languages') {
-                  update(
-                    field.key,
-                    text
-                        .split(',')
-                        .map((word) => word.trim())
-                        .where((word) => word.isNotEmpty)
-                        .toList(),
-                  );
-                } else {
-                  update(
-                    field.key,
-                    numeric.contains(field.key)
-                        ? int.tryParse(text) ?? text
-                        : text,
-                  );
-                }
-              },
+              onChanged: !enabled
+                  ? null
+                  : (next) {
+                      final text = next.trim();
+                      if (text.isEmpty) {
+                        update(field.key, null);
+                      } else if (field.key == 'languages') {
+                        update(
+                          field.key,
+                          text
+                              .split(',')
+                              .map((word) => word.trim())
+                              .where((word) => word.isNotEmpty)
+                              .toList(),
+                        );
+                      } else {
+                        update(
+                          field.key,
+                          numeric.contains(field.key)
+                              ? int.tryParse(text) ?? text
+                              : text,
+                        );
+                      }
+                    },
             );
       return Padding(padding: const EdgeInsets.only(bottom: 12), child: child);
     }).toList(),
@@ -204,6 +237,30 @@ class _ProfileEditorState extends State<ProfileEditor> {
   bool busy = false;
   String claimEmail = '';
   String evidence = '';
+  Json errors = {};
+  String? problem;
+
+  static const requiredProfile = {
+    'name',
+    'dob',
+    'gender',
+    'country',
+    'city',
+    'tradition',
+  };
+
+  void showError(String message, Json fields) {
+    if (!mounted) return;
+    final earlier = sections.indexWhere(
+      (fieldsInSection) =>
+          fieldsInSection.any((field) => fields.containsKey(field.key)),
+    );
+    setState(() {
+      problem = message;
+      errors = fields;
+      if (earlier >= 0) step = earlier;
+    });
+  }
 
   @override
   void initState() {
@@ -214,6 +271,22 @@ class _ProfileEditorState extends State<ProfileEditor> {
 
   Future<void> save(bool submit) async {
     if (busy) return;
+    final missing = <String, dynamic>{
+      for (final key in requiredProfile)
+        if (submit && !data.containsKey(key)) key: 'Required to submit.',
+      if (id == null && !agreed)
+        'consent': 'Confirm authorization before saving.',
+      if (id == null &&
+          widget.admin &&
+          !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(claimEmail.trim()))
+        'claimEmail': 'Enter a valid email.',
+      if (id == null && widget.admin && evidence.trim().length < 12)
+        'consentEvidence': 'Enter at least 12 characters.',
+    };
+    if (missing.isNotEmpty) {
+      showError('Review the highlighted fields.', missing);
+      return;
+    }
     if (submit &&
         !await confirm(
           context,
@@ -222,8 +295,12 @@ class _ProfileEditorState extends State<ProfileEditor> {
         ))
       return;
     if (!mounted) return;
-    setState(() => busy = true);
-    await runAction(context, () async {
+    setState(() {
+      busy = true;
+      problem = null;
+      errors = {};
+    });
+    try {
       data['preferences'] = preferences;
       final current = id;
       final result = current == null
@@ -246,9 +323,21 @@ class _ProfileEditorState extends State<ProfileEditor> {
       version = result['version'] as int;
       if (submit)
         await widget.api.post('/profiles/$id/submit', {'version': version});
-      if (mounted && submit) Navigator.pop(context, true);
-    }, success: submit ? 'Submitted for review' : 'Draft saved');
-    if (mounted) setState(() => busy = false);
+      if (!mounted) return;
+      if (submit) {
+        Navigator.pop(context, true);
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Draft saved')));
+      }
+    } on ApiError catch (error) {
+      showError(error.message, error.fields);
+    } catch (_) {
+      showError('The profile could not be saved. Try again.', {});
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
   @override
@@ -274,9 +363,20 @@ class _ProfileEditorState extends State<ProfileEditor> {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
+            if (problem != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  problem!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
             FieldInputs(
               key: ValueKey(step),
               fields: sections[step],
+              requiredKeys: requiredProfile,
+              errors: errors,
+              enabled: !busy,
               values: step == 4 ? preferences : data,
               update: (key, value) {
                 final destination = step == 4 ? preferences : data;
@@ -291,23 +391,33 @@ class _ProfileEditorState extends State<ProfileEditor> {
               if (widget.admin) ...[
                 TextFormField(
                   initialValue: claimEmail,
+                  enabled: !busy,
+                  keyboardType: TextInputType.emailAddress,
                   onChanged: (value) => claimEmail = value,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Candidate’s verified claim email',
+                    errorText: errors['claimEmail']?.toString(),
                   ),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   initialValue: evidence,
+                  enabled: !busy,
                   onChanged: (value) => evidence = value,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Consent evidence or reference',
+                    errorText: errors['consentEvidence']?.toString(),
                   ),
                 ),
               ],
               CheckboxListTile(
                 value: agreed,
-                onChanged: (next) => setState(() => agreed = next ?? false),
+                onChanged: busy
+                    ? null
+                    : (next) => setState(() => agreed = next ?? false),
+                subtitle: errors['consent'] is String
+                    ? Text(errors['consent'] as String)
+                    : null,
                 title: Text(
                   widget.admin
                       ? 'The candidate explicitly authorized this profile.'

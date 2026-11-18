@@ -286,6 +286,7 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
         decision: 'approved',
       });
       assert.equal((await inspect()).occupation, 'Architect');
+      assert.equal((await inspect()).favorite, false);
       const inProgress = await request('PUT', '/profiles/' + first.id, as(sender), {
         version: newer.version,
         data: draft('Synthetic Sender', 'Pilot'),
@@ -309,9 +310,16 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
         reason: 'Confirm occupation wording',
       });
       assert.equal((await inspect()).occupation, 'Architect');
+      assert.equal(
+        (await request('GET', '/profiles', as(sender))).items[0].reviewStatus,
+        'changes_requested',
+      );
+      assert.equal((await inspect()).favorite, false);
       await request('PUT', '/favorites/' + first.id, as(viewer), {});
       await request('PUT', '/favorites/' + first.id, as(viewer), {});
       assert.equal((await request('GET', '/favorites', as(viewer))).items.length, 1);
+      assert.equal((await inspect()).favorite, true);
+      assert.equal((await request('GET', '/discover/' + first.id, as(recipient))).favorite, false);
       assert.equal((await request('GET', '/favorites', as(recipient))).items.length, 0);
       assert.equal((await request('GET', '/recommendations', as(sender))).items[0].id, second.id);
       const saved = await request(
@@ -390,6 +398,10 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     const adminPath = '/admin/interests/' + id + '/decision';
     const customerPath = '/interests/' + id + '/decision';
     const contact = '/interests/' + id + '/contact';
+    const selected = '/interests?id=' + id;
+    const selectedForAdmin = '/admin' + selected;
+    assert.deepEqual((await request('GET', selected, as(viewer))).items, []);
+    assert.deepEqual((await request('GET', selected, as(recipient))).items, []);
     await request('POST', adminPath, as(admin), {
       version: 1,
       action: 'admin_approve',
@@ -397,6 +409,7 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     });
     await request('POST', customerPath, as(sender), { version: 2, action: 'accept' }, { status: 409 });
     await request('POST', customerPath, as(recipient), { version: 2, action: 'accept' });
+    assert.equal((await request('GET', selectedForAdmin, as(admin))).items[0].canAuthorize, 0);
     await request(
       'POST',
       adminPath,
@@ -406,17 +419,26 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     );
     await request('PUT', '/interests/' + id + '/consent', as(sender), { granted: true });
     await request('PUT', '/interests/' + id + '/consent', as(recipient), { granted: true });
+    assert.equal((await request('GET', selectedForAdmin, as(admin))).items[0].canAuthorize, 1);
+    assert.equal((await request('GET', selected, as(recipient))).items[0].canAuthorize, 0);
     await request('POST', adminPath, as(admin), {
       version: 3,
       action: 'authorize',
       reason: 'Both consented',
     });
     assert.equal((await request('GET', contact, as(sender))).email, 'recipient@example.test');
+    assert.equal((await request('GET', selected, as(sender))).items[0].canViewContact, 1);
     await request('GET', contact, as(viewer), undefined, { status: 404 });
     await request('PUT', '/interests/' + id + '/consent', as(recipient), { granted: false });
+    assert.equal((await request('GET', selected, as(sender))).items[0].canViewContact, 0);
     await request('GET', contact, as(sender), undefined, { status: 404 });
     await request('PUT', '/blocks/' + second.id, as(sender), {});
     await request('GET', '/discover/' + first.id, as(recipient), undefined, { status: 404 });
+    assert.equal((await request('GET', '/blocks', as(sender))).items[0].profileId, second.id);
+    assert.deepEqual((await request('GET', '/blocks', as(recipient))).items, []);
+    await request('DELETE', '/blocks/' + second.id, as(sender));
+    assert.deepEqual((await request('GET', '/blocks', as(sender))).items, []);
+    await request('GET', '/discover/' + first.id, as(recipient));
   });
 
   await t.test(

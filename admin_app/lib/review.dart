@@ -272,7 +272,7 @@ class _AdminQueueState extends State<AdminQueue> {
         'cancel',
       ],
       'interests' when item['status'] == 'pending_contact_authorization' => [
-        'authorize',
+        if (item['canAuthorize'] == 1) 'authorize',
         'cancel',
       ],
       'interests'
@@ -283,6 +283,12 @@ class _AdminQueueState extends State<AdminQueue> {
       'notifications' when item['readAt'] == null => ['mark_read'],
       _ => <String>[],
     };
+    final entityId = item['entityId'] ?? item['id'];
+    final showHistory =
+        ['accounts', 'reports', 'privacy-requests', 'audit'].contains(queue) &&
+        entityId is String &&
+        RegExp(r'^[0-9a-f-]{36}$').hasMatch(entityId);
+    final history = showHistory ? api.get('/admin/moderation/$entityId') : null;
     final decision = await showDialog<String>(
       context: context,
       builder: (dialog) => AlertDialog(
@@ -293,16 +299,48 @@ class _AdminQueueState extends State<AdminQueue> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: item.entries
-                  .map(
-                    (entry) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: SelectableText(
-                        '${entry.key} · ${entry.value ?? '—'}',
-                      ),
+              children: [
+                for (final entry in item.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: SelectableText(
+                      '${entry.key} · ${entry.value ?? '—'}',
                     ),
-                  )
-                  .toList(),
+                  ),
+                if (queue == 'interests' &&
+                    item['status'] == 'pending_contact_authorization' &&
+                    item['canAuthorize'] != 1)
+                  const Text(
+                    'Authorization requires current consent from both parties and two eligible profiles.',
+                  ),
+                if (history != null)
+                  FutureBuilder<Json>(
+                    future: history,
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        return Text(
+                          'Moderation history unavailable: ${snapshot.error}',
+                        );
+                      }
+                      if (!snapshot.hasData) {
+                        return const LinearProgressIndicator();
+                      }
+                      final actions = items(snapshot.requireData);
+                      if (actions.isEmpty) return const SizedBox.shrink();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Divider(),
+                          const Text('Moderation history'),
+                          for (final action in actions)
+                            SelectableText(
+                              '${label(action['kind'])} · ${action['reason']} · ${action['createdAt']}',
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+              ],
             ),
           ),
         ),
@@ -311,6 +349,11 @@ class _AdminQueueState extends State<AdminQueue> {
             onPressed: () => Navigator.pop(dialog),
             child: const Text('Close'),
           ),
+          if (item['profileId'] is String)
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, 'open_profile'),
+              child: const Text('Review profile'),
+            ),
           for (final option in decisionOptions)
             FilledButton(
               onPressed: () => Navigator.pop(dialog, option),
@@ -320,6 +363,17 @@ class _AdminQueueState extends State<AdminQueue> {
       ),
     );
     if (decision == null || !context.mounted) return;
+    if (decision == 'open_profile') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              ProfileReview(api: api, profileId: item['profileId'] as String),
+        ),
+      );
+      refresh();
+      return;
+    }
     await runAction(context, () async {
       final id = item['id'];
       if (decision == 'mark_read') {

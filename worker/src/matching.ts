@@ -79,14 +79,19 @@ export async function interests(env: Env, actor: Actor, url: URL) {
   ] as const;
   const status = statusParam ? choice(statusParam, 'status', statuses) : null;
   const admin = actor.role === 'admin';
+  const idParam = url.searchParams.get('id');
+  const interestId = idParam === null ? null : identifier(idParam);
+  const time = now();
   const result = await rows(
     env.DB_MAIN,
     `SELECT ${fields},
     CASE WHEN so.account_id=? THEN 'sent' WHEN ro.account_id=? THEN 'received' ELSE 'administration' END AS direction,
     (SELECT count(*) FROM jm_consents c WHERE c.interest_id=i.id AND c.revoked_at IS NULL
       AND c.account_id IN (so.account_id,ro.account_id) AND (?=1 OR c.account_id=?)) AS activeConsents,
-    CASE WHEN ?=1 THEN i.reason ELSE NULL END AS reviewReason
-    ${relation} WHERE (? IS NULL OR i.status=?) AND (?=1 OR so.account_id=? OR
+    CASE WHEN ?=1 THEN i.reason ELSE NULL END AS reviewReason,
+    (?=1 AND i.status='pending_contact_authorization' AND i.expires_at>? AND ${eligibility} AND ${mutual}) AS canAuthorize,
+    (i.status='authorized' AND i.expires_at>? AND ${eligibility} AND ${mutual}) AS canViewContact
+    ${relation} WHERE (? IS NULL OR i.status=?) AND (? IS NULL OR i.id=?) AND (?=1 OR so.account_id=? OR
       (ro.account_id=? AND EXISTS(SELECT 1 FROM jm_interest_events e WHERE e.interest_id=i.id AND e.status='pending_recipient')))
     ORDER BY i.updated_at DESC,i.id DESC LIMIT ? OFFSET ?`,
     actor.id,
@@ -94,8 +99,13 @@ export async function interests(env: Env, actor: Actor, url: URL) {
     Number(admin),
     actor.id,
     Number(admin),
+    Number(admin),
+    time,
+    time,
     status,
     status,
+    interestId,
+    interestId,
     Number(admin),
     actor.id,
     actor.id,
@@ -221,6 +231,18 @@ export async function contact(env: Env, actor: Actor, id: string) {
     now(),
   ).first<{ email: string }>();
   return result ?? missing();
+}
+
+export async function blockedProfiles(env: Env, actor: Actor, url: URL) {
+  const { limit, offset } = page(url);
+  const result = await rows(
+    env.DB_MAIN,
+    "SELECT (SELECT profile_id FROM jm_ownership WHERE account_id=b.blocked_id AND authority='owner' ORDER BY profile_id LIMIT 1) AS profileId, b.created_at AS createdAt FROM jm_blocks b WHERE b.account_id=? AND EXISTS(SELECT 1 FROM jm_ownership WHERE account_id=b.blocked_id AND authority='owner') ORDER BY b.created_at DESC,b.blocked_id LIMIT ? OFFSET ?",
+    actor.id,
+    limit + 1,
+    offset,
+  );
+  return listing(result, limit, offset);
 }
 
 export async function block(env: Env, actor: Actor, target: string, enabled: boolean) {

@@ -247,7 +247,14 @@ export async function publicDetail(env: Env, actor: Actor, id: string) {
     actor.id,
     id,
   ).first<PublicRow>();
-  return result ? candidate(result, env.DISCOVERY_DETAILS !== 'false') : missing();
+  if (!result) return missing();
+  const saved = await statement(
+    env.DB_MAIN,
+    'SELECT 1 FROM jm_favorites WHERE account_id=? AND profile_id=?',
+    actor.id,
+    id,
+  ).first();
+  return { ...candidate(result, env.DISCOVERY_DETAILS !== 'false'), favorite: !!saved };
 }
 
 export async function favorite(env: Env, actor: Actor, id: string, add: boolean) {

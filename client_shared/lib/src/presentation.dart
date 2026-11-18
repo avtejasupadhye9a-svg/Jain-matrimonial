@@ -280,7 +280,13 @@ class RemotePanel extends StatefulWidget {
 
 class _RemotePanelState extends State<RemotePanel> {
   late Future<Json> data = widget.load();
-  void refresh() => setState(() => data = widget.load());
+  void refresh() {
+    if (!mounted) return;
+    final next = widget.load();
+    setState(() {
+      data = next;
+    });
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<Json>(

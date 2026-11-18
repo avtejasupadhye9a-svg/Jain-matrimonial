@@ -14,6 +14,7 @@ class CustomerHome extends StatefulWidget {
 
 class _HomeState extends State<CustomerHome> {
   int tab = 0;
+  final visited = <int>{0};
   Api get api => widget.api;
   static const titles = [
     'My profile',
@@ -46,10 +47,24 @@ class _HomeState extends State<CustomerHome> {
           ),
         ],
       ),
-      body: views[tab],
+      body: IndexedStack(
+        index: tab,
+        children: [
+          for (var index = 0; index < views.length; index++)
+            TickerMode(
+              enabled: tab == index,
+              child: visited.contains(index)
+                  ? views[index]
+                  : const SizedBox.shrink(),
+            ),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tab,
-        onDestinationSelected: (value) => setState(() => tab = value),
+        onDestinationSelected: (value) => setState(() {
+          tab = value;
+          visited.add(value);
+        }),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.person_outline),
@@ -67,6 +82,22 @@ class _HomeState extends State<CustomerHome> {
         ],
       ),
     );
+  }
+}
+
+String profileStatus(Draft profile) {
+  if (profile.record['suspended'] == 1) return 'Suspended';
+  switch (profile.record['reviewStatus']) {
+    case 'pending_review':
+      return 'Pending review';
+    case 'changes_requested':
+      return 'Changes requested';
+    case 'rejected':
+      return 'Submission rejected';
+    case 'approved':
+      return 'Approved';
+    default:
+      return profile.record['publishedId'] != null ? 'Draft edits' : 'Draft';
   }
 }
 
@@ -117,11 +148,7 @@ class MyProfiles extends StatelessWidget {
                 title: Text(
                   profile.data['name']?.toString() ?? 'Unnamed draft',
                 ),
-                subtitle: Text(
-                  profile.record['publishedId'] == null
-                      ? 'Awaiting first approval'
-                      : 'Approved version available',
-                ),
+                subtitle: Text(profileStatus(profile)),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () async {
                   await Navigator.push(
@@ -257,7 +284,8 @@ class OwnProfile extends StatelessWidget {
 }
 
 class Interests extends StatefulWidget {
-  const Interests({super.key, required this.api});
+  const Interests({super.key, required this.api, this.interestId});
+  final String? interestId;
   final Api api;
   @override
   State<Interests> createState() => _InterestsState();
@@ -268,14 +296,33 @@ class _InterestsState extends State<Interests> {
   @override
   Widget build(BuildContext context) => RemotePanel(
     key: ValueKey(offset),
-    load: () => widget.api.get('/interests?offset=$offset'),
+    load: () => widget.api.get(
+      widget.api.query('/interests', {
+        'offset': offset,
+        if (widget.interestId != null) 'id': widget.interestId!,
+      }),
+    ),
     builder: (context, data, refresh) {
       final records = items(data);
       return ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: refresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh interests'),
+            ),
+          ),
           if (records.isEmpty)
-            const ListTile(title: Text('No interests to show.')),
+            ListTile(
+              title: Text(
+                widget.interestId == null
+                    ? 'No interests to show.'
+                    : 'This interest is unavailable.',
+              ),
+            ),
           for (final item in records) _interest(context, item, refresh),
           PageButtons(
             offset: offset,
@@ -366,7 +413,7 @@ class _InterestsState extends State<Interests> {
                     onPressed: () => setConsent(false),
                     child: const Text('Revoke consent'),
                   ),
-                if (status == 'authorized')
+                if (item['canViewContact'] == 1)
                   FilledButton(
                     onPressed: () => runAction(context, () async {
                       final contact = await api.get('/interests/$id/contact');
@@ -445,7 +492,10 @@ class _NotificationsState extends State<Notifications> {
                   MaterialPageRoute<void>(
                     builder: (_) => Scaffold(
                       appBar: AppBar(title: const Text('Interests')),
-                      body: Interests(api: widget.api),
+                      body: Interests(
+                        api: widget.api,
+                        interestId: entity as String,
+                      ),
                     ),
                   ),
                 );
@@ -508,11 +558,18 @@ class Settings extends StatelessWidget {
           }),
         ),
         ListTile(
-          title: const Text('Unblock a profile'),
-          onTap: () => runAction(context, () async {
-            final id = await prompt(context, 'Unblock a profile', 'Profile ID');
-            if (id != null && id.isNotEmpty) await api.delete('/blocks/$id');
-          }),
+          leading: const Icon(Icons.block),
+          title: const Text('Blocked profiles'),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => StatusList(
+                api: api,
+                title: 'Blocked profiles',
+                route: '/blocks',
+              ),
+            ),
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.history),
@@ -561,7 +618,7 @@ class Settings extends StatelessWidget {
   );
 }
 
-class StatusList extends StatelessWidget {
+class StatusList extends StatefulWidget {
   const StatusList({
     super.key,
     required this.api,
@@ -573,20 +630,63 @@ class StatusList extends StatelessWidget {
   final String route;
 
   @override
+  State<StatusList> createState() => _StatusListState();
+}
+
+class _StatusListState extends State<StatusList> {
+  int offset = 0;
+
+  @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(title)),
+    appBar: AppBar(title: Text(widget.title)),
     body: RemotePanel(
-      load: () => api.get(route),
+      key: ValueKey(offset),
+      load: () =>
+          widget.api.get(widget.api.query(widget.route, {'offset': offset})),
       builder: (context, data, refresh) {
         final records = items(data);
-        if (records.isEmpty) return empty('There are no requests to display.');
+        final blocks = widget.route == '/blocks';
         return ListView(
           children: [
+            if (records.isEmpty)
+              ListTile(
+                title: Text(
+                  blocks ? 'No blocked profiles.' : 'No requests to display.',
+                ),
+              ),
             for (final record in records)
               ListTile(
                 title: Text(label(record['kind'] ?? record['profileId'])),
-                subtitle: Text(label(record['status'])),
+                subtitle: Text(label(record['status'] ?? record['createdAt'])),
+                trailing: blocks
+                    ? TextButton(
+                        onPressed: () => runAction(context, () async {
+                          if (!await confirm(
+                            context,
+                            'Unblock this profile?',
+                            'The profile can appear in discovery again if it is eligible.',
+                          )) {
+                            return;
+                          }
+                          await widget.api.delete(
+                            '/blocks/${record['profileId']}',
+                          );
+                          if (!mounted) return;
+                          if (offset > 0 && records.length == 1) {
+                            setState(() => offset -= 20);
+                          } else {
+                            refresh();
+                          }
+                        }),
+                        child: const Text('Unblock'),
+                      )
+                    : null,
               ),
+            PageButtons(
+              offset: offset,
+              next: data['nextOffset'] as int?,
+              onPage: (value) => setState(() => offset = value),
+            ),
           ],
         );
       },

@@ -20,3 +20,10 @@ npx.cmd wrangler d1 execute DB_MAIN --remote --command "SELECT name FROM sqlite_
 npx.cmd wrangler d1 execute DB_OPERATIONS --remote --command "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"
 cloudflared tunnel info jain-matrimonial-storage
 ```
+
+## Before requesting production approval
+
+1. Record the currently deployed Worker version and inspect the existing D1 schemas and migration history using authenticated read-only access. Review compatibility of existing records with the jm_ tables and take a protected backup through the approved process.
+2. Confirm the Worker secret and verified email sender configuration through the Cloudflare dashboard. Keep QA fixtures disabled and keep file transfer and push disabled.
+3. Attach the native QA build run, local Worker verification and rollback notes to the release decision. Check the public health route both before and after the approved rollout, then use a separate synthetic test account for end-to-end verification.
+4. Apply remote migrations and deploy only on approval, in an agreed change window. If an application rollback is needed, restore the previously recorded Worker version. Review migration compatibility before any data restoration.

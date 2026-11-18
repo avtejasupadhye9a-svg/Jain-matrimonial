@@ -12,3 +12,5 @@ A Windows-developed monorepo for an admin-controlled matrimonial service.
 Start with [Windows setup](docs/SETUP.md). See [feature status](docs/FEATURES.md), [API](docs/API.md), [database](docs/DATABASE.md), [workflows](docs/WORKFLOWS.md), [security](docs/SECURITY.md), [architecture](docs/ARCHITECTURE.md), [storage](docs/STORAGE.md), and the [deployment gate](docs/DEPLOYMENT.md).
 
 The production API base is https://jain-matrimonial-api.avtejasupadhye-9a.workers.dev. Local development uses isolated databases and synthetic fixture identities. Temporary file staging, live file transfer, SMS and Android push require separate provider configuration.
+
+See [native build and QA artifacts](docs/NATIVE_BUILDS.md) and the [continuation progress report](docs/PROGRESS.md).

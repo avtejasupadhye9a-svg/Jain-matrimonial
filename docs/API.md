@@ -28,6 +28,7 @@ HTTP 401 means sign-in is required, 403 means forbidden, 404 means unavailable t
 | Customer | GET/POST /saved-searches, PUT/DELETE /saved-searches/{id} | name and filters for writes |
 | Customer | GET/POST /interests, POST /interests/{id}/decision | sender and recipient on create; action and version on decision |
 | Customer | PUT /interests/{id}/consent, GET /interests/{id}/contact | granted Boolean, or consent-gated verified email |
+| Customer | GET /blocks | List profiles blocked by the caller, with offset pagination |
 | Customer | PUT/DELETE /blocks/{id}, POST /reports | Block profile owner account, or profileId and reason |
 | Customer | GET /claims, /privacy-requests | Own claim and request status |
 | Customer | POST /privacy-requests | kind plus security challenge |
@@ -44,3 +45,5 @@ HTTP 401 means sign-in is required, 403 means forbidden, 404 means unavailable t
 | Local test only | POST /_local/admin, /_local/reconcile | Guarded synthetic admin bootstrap and outbox replay |
 
 Search filters include ID, age/height intervals, city/state/district/country, qualification/degree, occupation/employment type/income band, marital status, tradition/sub-community, diet, language, relocation and sort. Publication projections omit exact DOB, login identifiers, candidate name, family details and employer. Eligible profile details add preselected structured fields. Contact details use a separate, dynamically checked endpoint.
+
+Discovery detail returns the current account favorite state. Interest lists support an optional exact id filter without bypassing participant and review visibility rules. Interest rows report whether contact can currently be read. Admin interest rows also report whether the current eligibility and mutual consent permit authorization.

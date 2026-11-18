@@ -166,6 +166,7 @@ route(
   true,
 );
 route('GET', '/interests/:id/contact', 'customer', (c) => matching.contact(c.env, providerActor(c), id(c)));
+route('GET', '/blocks', 'customer', (c) => matching.blockedProfiles(c.env, providerActor(c), c.url));
 route(
   'PUT',
   '/blocks/:id',
