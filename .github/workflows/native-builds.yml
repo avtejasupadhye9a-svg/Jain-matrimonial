@@ -98,12 +98,12 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest -property installationPath
           if (!$vs) { throw 'Visual C++ runtime not found on the runner' }
-          $crt = Get-ChildItem (Join-Path $vs 'VC/Redist/MSVC') -Directory |
-            Sort-Object { [version]$_.Name } -Descending |
-            ForEach-Object { Get-ChildItem (Join-Path $_.FullName 'x64') -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue } |
+          $crt = Get-ChildItem (Join-Path $vs 'VC/Redist/MSVC') -Recurse -File -Filter 'msvcp140.dll' |
+            Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC[0-9]+\.CRT\\msvcp140\.dll$' } |
+            Sort-Object { [version]::new($_.VersionInfo.FileMajorPart, $_.VersionInfo.FileMinorPart, $_.VersionInfo.FileBuildPart, $_.VersionInfo.FilePrivatePart) } -Descending |
             Select-Object -First 1
           if (!$crt) { throw 'Visual C++ x64 runtime files not found' }
-          Copy-Item (Join-Path $crt.FullName '*.dll') $bundle
+          Copy-Item (Join-Path $crt.DirectoryName '*.dll') $bundle
           foreach ($item in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
             if (!(Test-Path (Join-Path $bundle $item))) { throw "Missing Visual C++ runtime $item" }
           }
