@@ -29,6 +29,15 @@ interface Outbox {
   created_at: string;
 }
 
+const adminNotificationActions = new Set([
+  'profile.submitted',
+  'claim.requested',
+  'interest.requested',
+  'interest.pending_contact_authorization',
+  'report.opened',
+  'privacy.requested',
+]);
+
 export async function reconcile(env: Env) {
   const events = await rows<Outbox>(
     env.DB_MAIN,
@@ -71,6 +80,30 @@ export async function reconcile(env: Env) {
           unix(),
         ),
       );
+    }
+    if (adminNotificationActions.has(event.action)) {
+      // Consent transitions may emit one event per customer. Notify each admin once.
+      const source =
+        event.action === 'interest.pending_contact_authorization'
+          ? event.id.split(':').slice(0, 2).join(':')
+          : event.id;
+      const admins = await rows<{ id: string }>(
+        env.DB_MAIN,
+        "SELECT id FROM jm_accounts WHERE role='admin' AND status='active'",
+      );
+      for (const admin of admins) {
+        updates.push(
+          statement(
+            ops,
+            'INSERT OR IGNORE INTO jm_notifications VALUES(?,?,?,?,?,NULL)',
+            source + ':admin:' + admin.id,
+            admin.id,
+            event.action,
+            event.entity_id,
+            event.created_at,
+          ),
+        );
+      }
     }
     await ops.batch(updates);
     await change(

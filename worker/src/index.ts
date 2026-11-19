@@ -20,6 +20,7 @@ import * as discovery from './discovery';
 import * as matching from './matching';
 import * as ops from './operations';
 import * as moderation from './moderation';
+import * as storage from './storage';
 
 interface Context extends auth.AuthContext {
   url: URL;
@@ -60,7 +61,7 @@ route('GET', '/readiness', 'admin', async (c) => {
   return {
     status: 'ok',
     emailConfigured: auth.mailConfigured(c.env),
-    uploads: 'unavailable',
+    uploads: await storage.storageStatus(c.env),
     push: 'unavailable',
   };
 });
@@ -201,6 +202,21 @@ route('POST', '/notifications/:notification/read', 'signed_in', (c) =>
   ops.readNotification(c.env, providerActor(c), id(c)),
 );
 route('GET', '/admin/dashboard', 'admin', (c) => ops.dashboard(c.env));
+route('GET', '/admin/profiles/:id/documents', 'admin', (c) => storage.documents(c.env, id(c), c.url));
+route('PUT', '/admin/documents/:id', 'admin', (c) =>
+  storage.upload(c.env, providerActor(c), id(c), c.request, c.url),
+);
+route('GET', '/admin/documents/:id', 'admin', async (c) => {
+  const file = await storage.download(c.env, providerActor(c), id(c));
+  return new Response(file.data, {
+    headers: {
+      'content-type': file.mime,
+      'content-disposition': 'attachment',
+      'content-security-policy': "default-src 'none'; sandbox",
+      'x-content-sha256': file.sha256,
+    },
+  });
+});
 for (const queue of ops.adminQueues)
   route('GET', '/admin/' + queue, 'admin', (c) => ops.adminList(c.env, c.url, queue));
 route(
@@ -386,9 +402,15 @@ async function fetchApi(request: Request, env: Env, ctx: ExecutionContext) {
         if (request.method !== 'GET') await rate(env.DB_MAIN, 'write:' + c.actor.id, 120, 300);
       }
       c.id = hit.id && !selected.path.includes(':notification') ? identifier(hit.id) : hit.id;
-      if (['POST', 'PUT'].includes(request.method)) c.input = await body(request);
+      if (['POST', 'PUT'].includes(request.method) && selected.path !== '/admin/documents/:id')
+        c.input = await body(request);
       const result = await execute(c, selected);
-      if (c.actor && request.method !== 'GET') ctx.waitUntil(ops.reconcile(env).catch(() => undefined));
+      if (c.actor && (request.method !== 'GET' || result instanceof Response))
+        ctx.waitUntil(ops.reconcile(env).catch(() => undefined));
+      if (result instanceof Response) {
+        result.headers.forEach((value, key) => headers.set(key, value));
+        return new Response(result.body, { status: result.status, headers });
+      }
       return reply(selected.status, { code: 'ok', message: 'Request completed.', requestId, data: result });
     }
     return missing();

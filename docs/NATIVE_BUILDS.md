@@ -1,9 +1,9 @@
 # Native build and QA artifacts
 
-Use the Native builds workflow in .github/workflows/native-builds.yml. It runs on the ci/jain-matrimonial-native branch and can also be dispatched manually once the workflow is on the default branch. The existing GitHub repository is Lasthope027/jain-matrimonial.
+Use the [Native builds workflow](https://github.com/avtejasupadhye9a-svg/Jain-matrimonial/actions/workflows/native-builds.yml) in the existing `avtejasupadhye9a-svg/Jain-matrimonial` repository. The `ci/admin-cloudflare` branch triggers the Windows job. After the update reaches the default branch, manual dispatch there also runs Windows. The `ci/jain-matrimonial-native` branch remains the Android QA build entry point.
 
 - The Android job uses Flutter 3.50.0, JDK 21 and selected Android SDK packages on GitHub’s Linux runner. The job builds an installable debug-signed QA APK. It requires no Android Studio, emulator, release signing key, or Cloudflare credential.
-- The Windows job builds a release-mode x64 bundle on the Visual Studio runner. Extract the Windows ZIP before opening jain_admin.exe. Keep the companion DLLs and data folder together. The QA bundle is unsigned.
+- The Windows job builds a release-mode x64 bundle on the GitHub-hosted Visual Studio runner. It verifies the Flutter engine, native plugins, AOT library, ICU data and assets, includes the app-local Visual C++ runtime, and smoke-tests process startup. Extract the Windows ZIP before opening `jain_admin.exe`. Keep the companion DLLs and data folder together. The QA bundle is unsigned.
 - Each job runs static analysis and its own widget tests before building, then uploads its artifact and SHA-256 checksum. The exact download URL appears in the job summary after upload. GitHub may require sign-in for artifact downloads.
 - Both packages use the configured HTTPS Worker endpoint. A build proves packaging. The corresponding production features depend on the deployed Worker, migrated databases, and authorized mail configuration.
 

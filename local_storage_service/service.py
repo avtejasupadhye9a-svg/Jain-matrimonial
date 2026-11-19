@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import re
+import subprocess
 import tempfile
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,7 +13,7 @@ from pathlib import Path
 MAX_BYTES = 8 * 1024 * 1024
 SIGNATURES = {"image/jpeg": b"\xff\xd8\xff", "image/png": b"\x89PNG\r\n\x1a\n", "application/pdf": b"%PDF-"}
 SHA256 = re.compile(r"[0-9a-f]{64}")
-FILE_ROUTE = re.compile(r"/objects/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})")
+FILE_ROUTE = re.compile(r"/objects/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(/content)?")
 
 
 class StorageError(Exception):
@@ -40,6 +41,16 @@ class Storage:
             checksum = hashlib.file_digest(handle, "sha256").hexdigest()
         return {"id": file_id, "sha256": checksum, "bytes": path.stat().st_size}
 
+    def read(self, file_id):
+        try:
+            with self.path(file_id).open("rb") as handle:
+                content = handle.read(MAX_BYTES + 1)
+        except FileNotFoundError as error:
+            raise StorageError(404, "Object unavailable") from error
+        if not 1 <= len(content) <= MAX_BYTES:
+            raise StorageError(503, "Invalid stored content")
+        return content
+
     def put(self, file_id, content, mime, checksum):
         signature = SIGNATURES.get(mime)
         if signature is None or not content.startswith(signature):
@@ -48,9 +59,14 @@ class Storage:
             raise StorageError(400, "Invalid object metadata")
         if not hmac.compare_digest(hashlib.sha256(content).hexdigest(), checksum):
             raise StorageError(422, "Checksum mismatch")
+        path = self.path(file_id)
+        if path.is_file():
+            result = self.metadata(file_id)
+            if hmac.compare_digest(result["sha256"], checksum):
+                return result
+            raise StorageError(409, "Object ID already has different content")
         if not self.scan(content, mime):
             raise StorageError(422, "Object failed validation")
-        path = self.path(file_id)
         with tempfile.NamedTemporaryFile(dir=self.root, delete=False) as temporary:
             temp = Path(temporary.name)
             try:
@@ -85,11 +101,12 @@ def server(storage, token, port=8765):
         def log_message(self, *_):
             return
 
-        def respond(self, status, data):
-            payload = json.dumps(data).encode()
+        def respond(self, status, data, binary=False):
+            payload = data if binary else json.dumps(data).encode()
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/octet-stream" if binary else "application/json")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -103,9 +120,12 @@ def server(storage, token, port=8765):
                     self.respond(200, {"status": "ok"})
                     return
                 route = FILE_ROUTE.fullmatch(self.path)
-                if not route:
+                if not route or (upload and route[2]):
                     raise StorageError(404, "Route unavailable")
                 file_id = route[1]
+                if route[2]:
+                    self.respond(200, storage.read(file_id), binary=True)
+                    return
                 if upload:
                     length = self.headers.get("Content-Length", "")
                     if self.headers.get("Transfer-Encoding") or not length.isascii() or not length.isdigit():
@@ -120,6 +140,8 @@ def server(storage, token, port=8765):
                 else:
                     result = storage.metadata(file_id)
                 self.respond(200, result)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             except StorageError as error:
                 self.respond(error.status, {"error": str(error)})
             except (OSError, ValueError):
@@ -134,12 +156,39 @@ def server(storage, token, port=8765):
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
 
+def defender_scanner(executable, root):
+    def scan(content, mime):
+        extension = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png"}[mime]
+        with tempfile.NamedTemporaryFile(dir=root, suffix=extension, delete=False) as temporary:
+            file = Path(temporary.name)
+            try:
+                temporary.write(content)
+                temporary.close()
+                result = subprocess.run(
+                    [str(executable), "-Scan", "-ScanType", "3", "-File", str(file), "-DisableRemediation"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=6, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                return result.returncode == 0 and file.is_file()
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise StorageError(503, "Storage scanner unavailable") from error
+            finally:
+                file.unlink(missing_ok=True)
+    return scan
+
+
 def run():
-    if os.environ.get("JAIN_STORAGE_LOCAL_TEST") != "true":
-        raise SystemExit("Storage origin requires a configured scanner. Local synthetic testing requires JAIN_STORAGE_LOCAL_TEST=true.")
-    root = os.environ.get("JAIN_STORAGE_ROOT", "./local-data")
+    local_test = os.environ.get("JAIN_STORAGE_LOCAL_TEST") == "true"
+    root = Path(os.environ.get("JAIN_STORAGE_ROOT", "./local-data" if local_test else ""))
     token = os.environ.get("JAIN_STORAGE_TOKEN", "")
-    with server(Storage(root, lambda _content, _mime: True), token) as service:
+    if local_test:
+        scan = lambda _content, _mime: True
+    else:
+        scanner = Path(os.environ.get("JAIN_STORAGE_DEFENDER_PATH", ""))
+        if os.name != 'nt' or not root.is_absolute() or not root.is_dir() or not scanner.is_absolute() or not scanner.is_file() or scanner.name.lower() != 'mpcmdrun.exe':
+            raise SystemExit("Configure an existing absolute private storage directory and an absolute Microsoft Defender MpCmdRun.exe path.")
+        scan = defender_scanner(scanner, root)
+    with server(Storage(root, scan), token, int(os.environ.get("JAIN_STORAGE_PORT", "8765"))) as service:
         service.serve_forever()
 
 

@@ -47,3 +47,7 @@ HTTP 401 means sign-in is required, 403 means forbidden, 404 means unavailable t
 Search filters include ID, age/height intervals, city/state/district/country, qualification/degree, occupation/employment type/income band, marital status, tradition/sub-community, diet, language, relocation and sort. Publication projections omit exact DOB, login identifiers, candidate name, family details and employer. Eligible profile details add preselected structured fields. Contact details use a separate, dynamically checked endpoint.
 
 Discovery detail returns the current account favorite state. Interest lists support an optional exact id filter without bypassing participant and review visibility rules. Interest rows report whether contact can currently be read. Admin interest rows also report whether the current eligibility and mutual consent permit authorization.
+
+## Admin documents
+
+`GET /admin/profiles/{profileId}/documents` lists identity-document metadata and direct synchronization state. `PUT /admin/documents/{uuid}?profileId={profileId}` accepts an 8 MiB or smaller binary PDF, PNG or JPEG with the exact MIME type and lowercase hexadecimal `X-Content-SHA256`. Keep the UUID stable across retries with the original bytes. `GET /admin/documents/{uuid}` returns a verified attachment for a confirmed record. All three routes require an active administrator session. The transfer endpoints return `503 storage_unavailable` when disabled or when permanent storage is unavailable. `GET /readiness` reports `disabled`, `unconfigured`, `offline` or `online` in `uploads`.

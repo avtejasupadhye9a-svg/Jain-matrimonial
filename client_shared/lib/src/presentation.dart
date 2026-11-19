@@ -23,6 +23,7 @@ Future<bool> confirm(
 ) async =>
     await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (dialog) => AlertDialog(
         title: Text(title),
         content: Text(explanation),
@@ -49,6 +50,7 @@ Future<String?> prompt(
   var value = initial;
   return showDialog<String>(
     context: context,
+    useRootNavigator: false,
     builder: (dialog) => AlertDialog(
       title: Text(title),
       content: TextFormField(

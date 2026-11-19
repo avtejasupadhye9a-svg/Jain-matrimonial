@@ -1,5 +1,12 @@
 # Continuation progress
 
+## Admin and Cloudflare integration
+
+- Verified `origin/main` matches the existing implementation in `avtejasupadhye9a-svg/Jain-matrimonial`. Prepared the Windows-only `ci/admin-cloudflare` trigger and runtime package checks.
+- Implemented Admin document upload, download and retry over a private Worker-to-PC transport. File metadata and audit use the existing databases and migrations. Added Operations notifications for review queues and removed open Admin screens when the session is cleared.
+- The Worker–D1–Python origin integration suite passed locally for permissions, consent revocation, audit, storage corruption, PC interruption and recovery. The Flutter Admin API client also passed local sign-in, profile publication, session restore, logout and rejected reuse of the revoked session. The live API probe and expired credentials are recorded in DEPLOYMENT.md.
+- Production deployment, backup-reviewed migrations, the existing Tunnel’s private VPC binding, actual Defender validation and transfer enablement remain pending. The GitHub artifact requires an authenticated workflow run.
+
 - Customer app. Browse detail reads the saved favorite state from the Worker. Discovery filters validate ranges and profile IDs before applying. Top-level navigation preserves filters and paging. Customers can view and remove their own blocked profiles, and an interest notification opens the relevant record. Draft, pending, correction, approved and suspended states are shown distinctly.
 - Profile forms. Required fields and server validation errors appear in the relevant step, including candidate consent and claim email fields in the admin flow.
 - Admin app. Authorization is offered only when the server confirms eligibility and current mutual consent. Report and claim records link to profile review. The moderation dialog includes available action history.

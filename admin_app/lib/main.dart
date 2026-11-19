@@ -4,7 +4,7 @@ import 'package:jain_client/jain_client.dart';
 
 import 'review.dart';
 
-void main() => runApp(AdminApp(api: Api()));
+void main() => runApp(AdminApp(api: Api(sessionScope: 'admin')));
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key, required this.api});
@@ -17,7 +17,11 @@ class AdminApp extends StatelessWidget {
     home: SessionGate(
       api: api,
       role: 'admin',
-      home: (_) => AdminHome(api: api),
+      home: (_) => Navigator(
+        key: ValueKey(api.account!.id),
+        onGenerateRoute: (_) =>
+            MaterialPageRoute<void>(builder: (_) => AdminHome(api: api)),
+      ),
     ),
   );
 }
@@ -203,11 +207,16 @@ class Readiness extends StatelessWidget {
                 : 'Email credentials unavailable',
           ),
         ),
-        const ListTile(
-          leading: Icon(Icons.no_photography_outlined),
-          title: Text('File transfer unavailable'),
-          subtitle: Text(
-            'Temporary storage and an authenticated origin route require configuration.',
+        ListTile(
+          leading: const Icon(Icons.storage_outlined),
+          title: Text(switch (data['uploads']) {
+            'online' => 'Permanent storage online',
+            'offline' => 'Permanent storage unreachable',
+            'unconfigured' => 'Permanent storage connection unconfigured',
+            _ => 'File transfer disabled',
+          }),
+          subtitle: const Text(
+            'Transfers require the permanent PC to be online.',
           ),
         ),
         const ListTile(

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { test } from 'node:test';
 import { build } from 'esbuild';
 import { unstable_dev } from 'wrangler';
@@ -20,6 +21,11 @@ export default {
         return deliverEmails({...env, BREVO_API_KEY: 'unused', BREVO_SENDER_EMAIL: 'sender@example.test'},
           async () => new Response(null, {status: 503})).then(() => Response.json({ok: true}));
       }
+    }
+    const origin = request.headers.get('x-test-storage-origin');
+    if (origin && request.headers.get('x-local-fixture-key') === env.LOCAL_FIXTURE_KEY) {
+      env = {...env, FILE_TRANSFER_ENABLED: 'true', STORAGE_LOCAL_URL: origin,
+        STORAGE_ORIGIN_TOKEN: request.headers.get('x-test-storage-token') || env.LOCAL_FIXTURE_KEY};
     }
     return app.fetch(request, env, ctx);
   },
@@ -136,6 +142,34 @@ const otp = (email) => request('POST', '/auth/otp/request', null, { email }, { s
 const verify = (code) =>
   request('POST', '/auth/otp/verify', null, { challengeId: code.challengeId, code: code.localTestCode });
 const as = (account) => account.accessToken;
+
+async function startStorage(directory) {
+  const origin = spawn(
+    'python',
+    [
+      '-u',
+      '-c',
+      'import sys; from local_storage_service.service import Storage,server; s=server(Storage(sys.argv[1],lambda *_:True),sys.argv[2],0); print(s.server_port,flush=True); s.serve_forever()',
+      directory,
+      secret,
+    ],
+    { cwd: process.env.JAIN_STORAGE_REPO || resolve('..'), stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  const [port] = await Promise.race([
+    once(origin.stdout, 'data'),
+    once(origin, 'exit').then(([code]) => {
+      throw new Error('Python origin exited: ' + code);
+    }),
+  ]);
+  const stop = async () => {
+    if (origin.exitCode !== null || origin.signalCode !== null) return;
+    const closed = once(origin, 'exit');
+    origin.kill();
+    await closed;
+  };
+  return { url: 'http://127.0.0.1:' + String(port).trim(), stop };
+}
+
 const draft = (name = 'Synthetic Candidate', occupation = 'Engineer') => ({
   name,
   dob: '1995-05-05',
@@ -233,7 +267,7 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     async () => {
       first = await published(sender, admin, draft('Synthetic Sender'));
       second = await published(recipient, admin, draft('Synthetic Recipient', 'Designer'));
-      assert.equal((await request('GET', '/readiness', as(admin))).uploads, 'unavailable');
+      assert.equal((await request('GET', '/readiness', as(admin))).uploads, 'disabled');
       await request('GET', '/files', as(sender), undefined, { status: 503 });
       await request('GET', '/profiles/' + first.id, as(viewer), undefined, { status: 404 });
       const page =
@@ -353,6 +387,17 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
       { status: 201 },
     );
     const wrong = await request('POST', '/auth/claim-code', as(viewer), {}, { status: 202 });
+    const revision = await request(
+      'POST',
+      '/profiles/' + account.id + '/submit',
+      as(admin),
+      { version: account.version },
+      { status: 201 },
+    );
+    await request('POST', '/admin/revisions/' + revision.id + '/decision', as(admin), {
+      decision: 'approved',
+    });
+    assert.equal((await request('GET', '/profiles/' + account.id, as(admin))).publication.id, revision.id);
     await request(
       'POST',
       '/profiles/claim',
@@ -495,5 +540,82 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     assert.equal((await request('GET', endpoint, as(sender))).unread, before.unread);
     await request('POST', endpoint + '/' + notification + '/read', as(sender), {});
     assert.equal((await request('GET', endpoint, as(sender))).unread, before.unread - 1);
+    const adminBefore = await request('GET', endpoint, as(admin));
+    const review = adminBefore.items.find((item) => item.kind === 'profile.submitted');
+    assert(review);
+    await request('POST', endpoint + '/' + review.id + '/read', as(viewer), {});
+    assert.equal((await request('GET', endpoint, as(admin))).unread, adminBefore.unread);
+    await request('POST', endpoint + '/' + review.id + '/read', as(admin), {});
+    assert.equal((await request('GET', endpoint, as(admin))).unread, adminBefore.unread - 1);
   });
+
+  await t.test(
+    'admin documents are private, verified, and retryable after the PC is unavailable',
+    async (storageTest) => {
+      const directory = resolve(await mkdtemp('.wrangler/objects'));
+      const origin = await startStorage(directory);
+      storageTest.after(origin.stop);
+      const png = Buffer.from('89504e470d0a1a0a73796e746865746963', 'hex');
+      const checksum = createHash('sha256').update(png).digest('hex');
+      const file = randomUUID();
+      const retry = randomUUID();
+      const docs = '/admin/profiles/' + first.id + '/documents';
+      async function transfer(
+        method,
+        path,
+        { target = origin.url, token = as(admin), hash = checksum, status = 200, originToken } = {},
+      ) {
+        const headers = { 'x-local-fixture-key': secret, 'x-test-storage-origin': target };
+        if (token) headers.Authorization = 'Bearer ' + token;
+        if (originToken) headers['x-test-storage-token'] = originToken;
+        if (method === 'PUT') {
+          headers['Content-Type'] = 'image/png';
+          headers['X-Content-SHA256'] = hash;
+        }
+        const response = await fetch('http://127.0.0.1:' + instance.port + path, {
+          method,
+          headers,
+          body: method === 'PUT' ? png : undefined,
+        });
+        assert.equal(response.status, status, response.status === status ? '' : await response.text());
+        return response;
+      }
+      const url = (id) => '/admin/documents/' + id;
+      const upload = (id, options) => transfer('PUT', url(id) + '?profileId=' + first.id, options);
+      await transfer('GET', docs, { token: null, status: 401 });
+      await transfer('GET', docs, { token: as(sender), status: 403 });
+      await upload(file, { token: 'a'.repeat(64), status: 401 });
+      await upload(file, { hash: '0'.repeat(64), status: 422 });
+      await upload(file, { originToken: 'x'.repeat(32), status: 503 });
+      assert.equal((await (await transfer('GET', '/readiness')).json()).data.uploads, 'online');
+      assert.equal((await (await upload(file)).json()).data.state, 'confirmed');
+      await upload(file);
+      await transfer('GET', url(file), { token: as(sender), status: 403 });
+      const download = await transfer('GET', url(file));
+      assert.equal(download.headers.get('cache-control'), 'no-store');
+      assert.equal(download.headers.get('content-disposition'), 'attachment');
+      assert.deepEqual(Buffer.from(await download.arrayBuffer()), png);
+      await origin.stop();
+      await upload(retry, { status: 503 });
+      await transfer('GET', url(file), { status: 503 });
+      const failed = (await (await transfer('GET', docs)).json()).data.items;
+      assert.equal(failed.find((row) => row.id === retry).state, 'failed');
+      const restarted = await startStorage(directory);
+      storageTest.after(restarted.stop);
+      assert.equal((await (await upload(retry, { target: restarted.url })).json()).data.state, 'confirmed');
+      await writeFile(resolve(directory, file), 'synthetic corrupted bytes');
+      await transfer('GET', url(file), { target: restarted.url, status: 503 });
+      await request('POST', '/_local/reconcile', null, {});
+      const [audit] = await sqlBatch('DB_OPERATIONS', [
+        { sql: 'SELECT action FROM jm_audit WHERE entity_id=?', params: [file] },
+      ]);
+      assert.deepEqual(audit.results.map((row) => row.action).sort(), [
+        'storage.confirmed',
+        'storage.download_failed',
+        'storage.download_failed',
+        'storage.downloaded',
+        'storage.upload_failed',
+      ]);
+    },
+  );
 });

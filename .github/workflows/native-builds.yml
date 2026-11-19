@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - ci/jain-matrimonial-native
+      - ci/admin-cloudflare
 
 permissions:
   contents: read
@@ -17,6 +18,7 @@ env:
 jobs:
   android:
     name: Android customer APK
+    if: github.ref == 'refs/heads/ci/jain-matrimonial-native'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -89,9 +91,27 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           flutter build windows --release --no-pub
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $bundle = 'build/windows/x64/runner/Release'
-          foreach ($item in 'jain_admin.exe','flutter_windows.dll','data/flutter_assets') {
+          $bundle = (Resolve-Path 'build/windows/x64/runner/Release').Path
+          foreach ($item in 'jain_admin.exe','flutter_windows.dll','data/app.so','data/icudtl.dat','data/flutter_assets','flutter_secure_storage_windows_plugin.dll','file_selector_windows_plugin.dll') {
             if (!(Test-Path (Join-Path $bundle $item))) { throw "Missing runtime item $item" }
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest -property installationPath
+          if (!$vs) { throw 'Visual C++ runtime not found on the runner' }
+          $crt = Get-ChildItem (Join-Path $vs 'VC/Redist/MSVC') -Directory |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Get-ChildItem (Join-Path $_.FullName 'x64') -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue } |
+            Select-Object -First 1
+          if (!$crt) { throw 'Visual C++ x64 runtime files not found' }
+          Copy-Item (Join-Path $crt.FullName '*.dll') $bundle
+          foreach ($item in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
+            if (!(Test-Path (Join-Path $bundle $item))) { throw "Missing Visual C++ runtime $item" }
+          }
+          $app = Start-Process -FilePath (Join-Path $bundle 'jain_admin.exe') -WorkingDirectory $bundle -WindowStyle Hidden -PassThru
+          try {
+            if ($app.WaitForExit(8000)) { throw "Admin exited at startup with code $($app.ExitCode)" }
+          } finally {
+            if (!$app.HasExited) { Stop-Process -InputObject $app }
           }
           $output = Join-Path $env:GITHUB_WORKSPACE 'native-artifacts'
           New-Item -ItemType Directory $output | Out-Null

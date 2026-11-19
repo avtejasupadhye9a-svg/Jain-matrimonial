@@ -69,9 +69,15 @@ class Draft {
 }
 
 class Api extends ChangeNotifier {
-  Api({String base = apiBase, FlutterSecureStorage? storage})
-    : origin = Uri.parse(base),
-      _storage = storage ?? const FlutterSecureStorage() {
+  Api({
+    String base = apiBase,
+    FlutterSecureStorage? storage,
+    String? sessionScope,
+  }) : origin = Uri.parse(base),
+       _refreshKey = sessionScope == null
+           ? 'jain-matrimonial-refresh'
+           : 'jain-matrimonial-refresh-$sessionScope',
+       _storage = storage ?? const FlutterSecureStorage() {
     if (origin.scheme != 'https' && !localDebug) {
       throw ArgumentError('HTTPS is required for the Worker API');
     }
@@ -82,7 +88,7 @@ class Api extends ChangeNotifier {
   final HttpClient _http = HttpClient()
     ..connectionTimeout = const Duration(seconds: 12);
   final Random _random = Random.secure();
-  static const _refreshKey = 'jain-matrimonial-refresh';
+  final String _refreshKey;
   String? _access;
   String? _refresh;
   Future<void>? _rotation;
@@ -166,8 +172,8 @@ class Api extends ChangeNotifier {
     _access = null;
     _refresh = null;
     account = null;
-    await _storage.delete(key: _refreshKey);
     notifyListeners();
+    await _storage.delete(key: _refreshKey);
   }
 
   Future<void> logout() async {
@@ -204,9 +210,19 @@ class Api extends ChangeNotifier {
             24,
             (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0'),
           ).join();
+    return _withSession(
+      (token) => _send(method, path, data, token: token, key: key),
+      authenticated,
+    );
+  }
+
+  Future<T> _withSession<T>(
+    Future<T> Function(String? token) send,
+    bool authenticated,
+  ) async {
     final token = authenticated ? _access : null;
     try {
-      return await _send(method, path, data, token: token, key: key);
+      return await send(token);
     } on ApiError catch (error) {
       if (error.status != 401 || !authenticated || _refresh == null) rethrow;
       try {
@@ -215,9 +231,53 @@ class Api extends ChangeNotifier {
         if (refreshError.status == 401) await clear();
         rethrow;
       }
-      return _send(method, path, data, token: _access, key: key);
+      try {
+        return await send(_access);
+      } on ApiError catch (retryError) {
+        if (retryError.status == 401) await clear();
+        rethrow;
+      }
     }
   }
+
+  Future<Json> uploadDocument(
+    String path,
+    Uint8List bytes,
+    String mime,
+    String sha256,
+  ) => _withSession(
+    (token) => _send(
+      'PUT',
+      path,
+      null,
+      token: token,
+      binary: bytes,
+      mime: mime,
+      sha256: sha256,
+    ),
+    true,
+  );
+
+  Future<Uint8List> downloadDocument(String path) => _withSession(
+    (token) => _exchange('GET', path, token, 'application/octet-stream', (
+      _,
+      response,
+    ) async {
+      if (response.statusCode != 200) {
+        await _responseJson(response);
+        throw const ApiError(0, 'The document could not be downloaded.', {});
+      }
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in response.timeout(const Duration(seconds: 20))) {
+        if (bytes.length + chunk.length > 8 * 1024 * 1024) {
+          throw const ApiError(0, 'The downloaded document exceeds 8 MiB.', {});
+        }
+        bytes.add(chunk);
+      }
+      return bytes.takeBytes();
+    }),
+    true,
+  );
 
   Future<Json> _send(
     String method,
@@ -225,6 +285,70 @@ class Api extends ChangeNotifier {
     Json? data, {
     String? token,
     String? key,
+    Uint8List? binary,
+    String? mime,
+    String? sha256,
+  }) => _exchange(
+    method,
+    path,
+    token,
+    'application/json',
+    (request, response) {
+      return _responseJson(response);
+    },
+    prepare: (request) {
+      if (key != null) request.headers.set('Idempotency-Key', key);
+      if (binary != null) {
+        request.headers.set(HttpHeaders.contentTypeHeader, mime!);
+        request.headers.set('X-Content-SHA256', sha256!);
+        request.contentLength = binary.length;
+        request.add(binary);
+      } else if (data != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(jsonEncode(data));
+      }
+    },
+  );
+
+  Future<Json> _responseJson(HttpClientResponse response) async {
+    final raw = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(const Duration(seconds: 20));
+    Json json;
+    try {
+      json = asJson(jsonDecode(raw));
+    } catch (_) {
+      throw const ApiError(
+        0,
+        'The Worker did not return a valid API response.',
+        {},
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiError(
+        response.statusCode,
+        json['message']?.toString() ?? 'Request failed.',
+        json['fields'] is Map ? asJson(json['fields']) : {},
+      );
+    }
+    if (json['code'] != 'ok' || json['data'] is! Map) {
+      throw const ApiError(
+        0,
+        'The Worker did not return a valid API response.',
+        {},
+      );
+    }
+    return asJson(json['data']);
+  }
+
+  Future<T> _exchange<T>(
+    String method,
+    String path,
+    String? token,
+    String accept,
+    Future<T> Function(HttpClientRequest, HttpClientResponse) read, {
+    void Function(HttpClientRequest)? prepare,
   }) async {
     final uri = origin.resolve(path);
     if (uri.origin != origin.origin)
@@ -232,32 +356,16 @@ class Api extends ChangeNotifier {
     try {
       final request = await _http.openUrl(method, uri);
       request.followRedirects = false;
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(HttpHeaders.acceptHeader, accept);
       if (token != null)
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      if (key != null) request.headers.set('Idempotency-Key', key);
       if (localDebug && fixtureKey.isNotEmpty)
         request.headers.set('x-local-fixture-key', fixtureKey);
-      if (data != null) {
-        request.headers.contentType = ContentType.json;
-        request.write(jsonEncode(data));
-      }
+      prepare?.call(request);
       final response = await request.close().timeout(
         const Duration(seconds: 20),
       );
-      final raw = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 20));
-      final json = asJson(jsonDecode(raw));
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw ApiError(
-          response.statusCode,
-          json['message']?.toString() ?? 'Request failed.',
-          json['fields'] is Map ? asJson(json['fields']) : {},
-        );
-      }
-      return json['data'] is Map ? asJson(json['data']) : {};
+      return await read(request, response);
     } on ApiError {
       rethrow;
     } catch (_) {

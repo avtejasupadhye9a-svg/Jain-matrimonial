@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:jain_client/jain_client.dart';
 
+import 'documents.dart';
+
 const columns = <String, Map<String, String>>{
   'profiles': {
     'name': 'Candidate',
@@ -176,15 +178,26 @@ class _AdminQueueState extends State<AdminQueue> {
                         scrollDirection: Axis.horizontal,
                         child: DataTable(
                           columns: [
+                            const DataColumn(label: Text('Action')),
                             ...spec.values.map(
                               (title) => DataColumn(label: Text(title)),
                             ),
-                            const DataColumn(label: Text('Action')),
                           ],
                           rows: records
                               .map(
                                 (record) => DataRow(
                                   cells: [
+                                    DataCell(
+                                      TextButton(
+                                        onPressed: () => details(
+                                          context,
+                                          queue,
+                                          record,
+                                          refresh,
+                                        ),
+                                        child: const Text('Open'),
+                                      ),
+                                    ),
                                     ...spec.keys.map(
                                       (key) => DataCell(
                                         ConstrainedBox(
@@ -197,17 +210,6 @@ class _AdminQueueState extends State<AdminQueue> {
                                             overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                    DataCell(
-                                      TextButton(
-                                        onPressed: () => details(
-                                          context,
-                                          queue,
-                                          record,
-                                          refresh,
-                                        ),
-                                        child: const Text('Open'),
                                       ),
                                     ),
                                   ],
@@ -291,6 +293,7 @@ class _AdminQueueState extends State<AdminQueue> {
     final history = showHistory ? api.get('/admin/moderation/$entityId') : null;
     final decision = await showDialog<String>(
       context: context,
+      useRootNavigator: false,
       builder: (dialog) => AlertDialog(
         title: Text(label(queue)),
         content: SizedBox(
@@ -462,6 +465,17 @@ class ProfileReview extends StatelessWidget {
             Wrap(
               spacing: 8,
               children: [
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ProfileDocuments(api: api, profileId: profileId),
+                    ),
+                  ),
+                  icon: const Icon(Icons.attachment),
+                  label: const Text('Private documents'),
+                ),
                 OutlinedButton(
                   onPressed: () async {
                     await Navigator.push(
@@ -563,9 +577,6 @@ class ProfileReview extends StatelessWidget {
                   ].whereType<String>().join(' · '),
                 ),
               ),
-            Text(
-              'Media metadata (${(data['media'] as List).length}) · transfer unavailable',
-            ),
           ],
         );
       },
