@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ChangeNotifier, kDebugMode;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 typedef Json = Map<String, dynamic>;
@@ -32,7 +33,7 @@ class Account {
   factory Account.fromJson(Json json) => Account(
     json['id'] as String,
     json['role'] as String,
-    json['email'] as String,
+    json['email'] as String? ?? '',
   );
   final String id;
   final String role;
@@ -73,6 +74,7 @@ class Api extends ChangeNotifier {
     String base = apiBase,
     FlutterSecureStorage? storage,
     String? sessionScope,
+    this.persistSession = true,
   }) : origin = Uri.parse(base),
        _refreshKey = sessionScope == null
            ? 'jain-matrimonial-refresh'
@@ -89,6 +91,7 @@ class Api extends ChangeNotifier {
     ..connectionTimeout = const Duration(seconds: 12);
   final Random _random = Random.secure();
   final String _refreshKey;
+  final bool persistSession;
   String? _access;
   String? _refresh;
   Future<void>? _rotation;
@@ -99,6 +102,7 @@ class Api extends ChangeNotifier {
       kDebugMode && ['localhost', '127.0.0.1'].contains(origin.host);
 
   Future<void> restore() async {
+    if (!persistSession) return;
     _refresh = await _storage.read(key: _refreshKey);
     if (_refresh == null) return;
     try {
@@ -113,6 +117,36 @@ class Api extends ChangeNotifier {
 
   Future<Json> requestCode(String email) =>
       post('/auth/otp/request', {'email': email}, authenticated: false);
+
+  Future<void> signInAdmin(String password) async {
+    final data = await post('/admin/auth/login', {
+      'password': password,
+    }, authenticated: false);
+    final found = Account.fromJson(asJson(data['account']));
+    if (found.role != 'admin') {
+      throw const ApiError(
+        403,
+        'This account cannot use this application.',
+        {},
+      );
+    }
+    await _acceptTokens(data);
+    account = found;
+    notifyListeners();
+  }
+
+  Future<void> changeAdminPassword(
+    String current,
+    String next,
+    String confirmation,
+  ) async {
+    await post('/admin/auth/password', {
+      'currentPassword': current,
+      'newPassword': next,
+      'confirmPassword': confirmation,
+    });
+    await clear();
+  }
 
   Future<void> signIn(
     String challengeId,
@@ -144,7 +178,7 @@ class Api extends ChangeNotifier {
 
   Future<void> _acceptTokens(Json data) async {
     final refresh = data['refreshToken'] as String;
-    await _storage.write(key: _refreshKey, value: refresh);
+    if (persistSession) await _storage.write(key: _refreshKey, value: refresh);
     _refresh = refresh;
     _access = data['accessToken'] as String;
   }
@@ -158,6 +192,9 @@ class Api extends ChangeNotifier {
       final tokens = await _send('POST', '/auth/refresh', {
         'refreshToken': refresh,
       });
+      if (_refresh != refresh) {
+        throw const ApiError(401, 'Sign in to continue.', {});
+      }
       await _acceptTokens(tokens);
     }();
     _rotation = future;
@@ -173,7 +210,7 @@ class Api extends ChangeNotifier {
     _refresh = null;
     account = null;
     notifyListeners();
-    await _storage.delete(key: _refreshKey);
+    if (persistSession) await _storage.delete(key: _refreshKey);
   }
 
   Future<void> logout() async {

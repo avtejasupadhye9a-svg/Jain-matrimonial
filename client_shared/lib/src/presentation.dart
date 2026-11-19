@@ -221,10 +221,12 @@ class SessionGate extends StatefulWidget {
     required this.api,
     required this.role,
     required this.home,
+    this.signIn,
   });
   final Api api;
   final String role;
   final Widget Function(BuildContext) home;
+  final WidgetBuilder? signIn;
   @override
   State<SessionGate> createState() => _SessionGateState();
 }
@@ -265,7 +267,8 @@ class _SessionGateState extends State<SessionGate> {
       return ListenableBuilder(
         listenable: widget.api,
         builder: (context, _) => widget.api.account == null
-            ? SignIn(api: widget.api, role: widget.role)
+            ? (widget.signIn?.call(context) ??
+                  SignIn(api: widget.api, role: widget.role))
             : widget.home(context),
       );
     },

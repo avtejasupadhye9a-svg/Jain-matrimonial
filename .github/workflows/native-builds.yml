@@ -117,13 +117,26 @@ jobs:
           New-Item -ItemType Directory $output | Out-Null
           $zip = Join-Path $output 'jain-matrimonial-admin-windows-x64.zip'
           Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $zip
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $files = @($archive.Entries | Where-Object Length -gt 0 |
+              ForEach-Object { $_.FullName.Replace('\', '/') })
+            foreach ($item in 'jain_admin.exe','flutter_windows.dll','data/app.so','data/icudtl.dat','flutter_secure_storage_windows_plugin.dll','file_selector_windows_plugin.dll','msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
+              if ($item -cnotin $files) { throw "ZIP missing $item" }
+            }
+            if (!($files -clike 'data/flutter_assets/*')) { throw 'ZIP missing Flutter assets' }
+          } finally {
+            $archive.Dispose()
+          }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  jain-matrimonial-admin-windows-x64.zip" | Set-Content (Join-Path $output 'SHA256SUMS.txt')
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: windows
         with:
           name: jain-matrimonial-admin-windows-x64
-          path: native-artifacts/
+          path: |
+            native-artifacts/jain-matrimonial-admin-windows-x64.zip
+            native-artifacts/SHA256SUMS.txt
           if-no-files-found: error
       - name: Link Windows artifact
         shell: pwsh

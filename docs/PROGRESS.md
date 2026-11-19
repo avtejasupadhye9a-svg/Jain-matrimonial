@@ -1,5 +1,13 @@
 # Continuation progress
 
+## Admin password-only login
+
+- Added a single Windows Admin password field and Dashboard → Settings → Change Password. Customer email OTP remains in place.
+- Added a singleton verifier and versioned Admin sessions through an additive DB_MAIN migration. The private operator script provisioned an isolated local Admin account and refused a second setup.
+- Local Worker, Admin and customer widget tests, and both desktop Dart-to-Worker integration checks passed. Cloudflare cutover and a refreshed Windows distribution build are pending.
+- Follow-up verification passed on PowerShell 7.6.9 with one-time local bootstrap, a simulated production bootstrap request, and the complete Flutter Admin UI flow against the loopback Worker and D1. The UI signed in, changed the password, rejected the old password, invalidated a second session, and signed out. The Worker tests also exercised malformed verifiers, replacement and deletion protection, throttling, concurrent changes, logout and customer OTP.
+- Read-only production inspection confirmed one active Admin and DB_MAIN at migration `0004`. The deployed Worker uses the wrong operations binding name and lacks the Admin pepper. The cutover guide records the approved sequence and the refreshed Windows build steps.
+
 ## Admin and Cloudflare integration
 
 - Verified `origin/main` matches the existing implementation in `avtejasupadhye9a-svg/Jain-matrimonial`. Prepared the Windows-only `ci/admin-cloudflare` trigger and runtime package checks.

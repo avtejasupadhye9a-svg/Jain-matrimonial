@@ -10,6 +10,7 @@ The Worker targets the existing jain-matrimonial-main (DB_MAIN) and jain-matrimo
 | DB_MAIN | 0002_profiles.sql | Profiles, ownership, drafts, revisions, claims, publication, moderation triggers |
 | DB_MAIN | 0003_matching.sql | Favorites, saved searches, interests and events, consent, privacy, blockers, file metadata |
 | DB_MAIN | 0004_moderation.sql | Moderation reasons, audit trigger and privacy request closure |
+| DB_MAIN | 0005_admin_password.sql | Singleton Admin verifier, session credential versions and password change audit and revocation triggers |
 | DB_OPERATIONS | 0001_operations.sql | Notifications, audit, email delivery jobs, storage jobs |
 
 ## Schema relationship overview

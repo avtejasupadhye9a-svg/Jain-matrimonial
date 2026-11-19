@@ -1,4 +1,5 @@
 AUTH_SECRET=replace-with-random-local-secret-at-least-32-characters
+ADMIN_PASSWORD_PEPPER=
 JAIN_LOCAL_TEST=false
 LOCAL_FIXTURE_KEY=
 BREVO_SENDER_EMAIL=

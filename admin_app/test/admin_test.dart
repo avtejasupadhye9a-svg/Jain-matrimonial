@@ -6,9 +6,33 @@ import 'package:jain_client/jain_client.dart';
 import 'package:jain_admin/main.dart';
 
 class TestApi extends Api {
+  TestApi({this.startsSignedIn = true});
+  final bool startsSignedIn;
+  bool rejectLogin = false;
+  int changes = 0;
+
   @override
   Future<void> restore() async {
-    account = const Account('admin-test', 'admin', 'admin@example.test');
+    if (startsSignedIn) account = const Account('admin-test', 'admin', '');
+  }
+
+  @override
+  Future<void> signInAdmin(String password) async {
+    if (rejectLogin) {
+      throw const ApiError(401, 'The administrator password is incorrect.', {});
+    }
+    account = const Account('admin-test', 'admin', '');
+    notifyListeners();
+  }
+
+  @override
+  Future<void> changeAdminPassword(
+    String current,
+    String next,
+    String confirmation,
+  ) async {
+    changes++;
+    expire();
   }
 
   void expire() {
@@ -93,6 +117,56 @@ void main() {
     api.expire();
     await tester.pumpAndSettle();
     expect(find.text('Private documents'), findsNothing);
-    expect(find.text('Email a verification code'), findsOneWidget);
+    expect(find.text('Login'), findsOneWidget);
   });
+
+  testWidgets(
+    'password-only login leads to Settings and changing the password signs out',
+    (tester) async {
+      final api = TestApi(startsSignedIn: false)..rejectLogin = true;
+      addTearDown(api.dispose);
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(AdminApp(api: api));
+      await tester.pumpAndSettle();
+      final fields = find.byType(EditableText);
+      expect(fields, findsOneWidget);
+      expect(tester.widget<EditableText>(fields).obscureText, isTrue);
+      expect(find.text('Email address'), findsNothing);
+      final sample = List.filled(22, 'w').join();
+      await tester.enterText(fields, sample);
+      await tester.tap(find.text('Login'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('The administrator password is incorrect.'),
+        findsOneWidget,
+      );
+      api.rejectLogin = false;
+      await tester.enterText(fields, sample);
+      await tester.tap(find.text('Login'));
+      await tester.pumpAndSettle();
+      expect(find.text('Active customers'), findsOneWidget);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Settings'));
+      await tester.pumpAndSettle();
+      expect(fields, findsNWidgets(3));
+      for (final field in tester.widgetList<EditableText>(fields)) {
+        expect(field.obscureText, isTrue);
+      }
+      final next = List.filled(23, 'x').join();
+      await tester.enterText(fields.at(0), sample);
+      await tester.enterText(fields.at(1), next);
+      await tester.enterText(fields.at(2), sample);
+      await tester.tap(find.widgetWithText(FilledButton, 'Change Password'));
+      await tester.pumpAndSettle();
+      expect(find.text('The new passwords do not match.'), findsOneWidget);
+      expect(api.changes, 0);
+      await tester.enterText(fields.at(2), next);
+      await tester.tap(find.widgetWithText(FilledButton, 'Change Password'));
+      await tester.pumpAndSettle();
+      expect(api.changes, 1);
+      expect(find.text('Login'), findsOneWidget);
+    },
+  );
 }

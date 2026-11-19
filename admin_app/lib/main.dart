@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:jain_client/jain_client.dart';
 
 import 'review.dart';
+import 'admin_password.dart';
 
-void main() => runApp(AdminApp(api: Api(sessionScope: 'admin')));
+void main() => runApp(AdminApp(api: Api(persistSession: false)));
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key, required this.api});
@@ -17,6 +18,7 @@ class AdminApp extends StatelessWidget {
     home: SessionGate(
       api: api,
       role: 'admin',
+      signIn: (_) => AdminLogin(api: api),
       home: (_) => Navigator(
         key: ValueKey(api.account!.id),
         onGenerateRoute: (_) =>
@@ -39,6 +41,7 @@ const groups = <String, (String, IconData)>{
   'notifications': ('Notifications', Icons.notifications_outlined),
   'audit': ('Audit log', Icons.history),
   'readiness': ('Storage and readiness', Icons.storage_outlined),
+  'settings': ('Settings', Icons.settings_outlined),
 };
 
 class AdminHome extends StatefulWidget {
@@ -115,6 +118,7 @@ class _AdminHomeState extends State<AdminHome> {
                           choose: (queue) => setState(() => selected = queue),
                         ),
                         'readiness' => Readiness(api: widget.api),
+                        'settings' => AdminPasswordSettings(api: widget.api),
                         _ => AdminQueue(
                           key: ValueKey(selected),
                           api: widget.api,
@@ -174,6 +178,14 @@ class Dashboard extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: () => choose('settings'),
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('Settings'),
+          ),
+        ),
         Align(
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(

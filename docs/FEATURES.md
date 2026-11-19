@@ -2,7 +2,7 @@
 
 | Area | Source available | Verification and remaining scope |
 |---|---|---|
-| Auth | Email OTP, rotating sessions, logout, change email, security challenges and synthetic admin bootstrapping | Live sender, Cloudflare authentication and admin provisioning unverified |
+| Auth | Customer email OTP and security challenges. One Admin password, private D1 setup, change password, rotating sessions, and revocation. | Production sender, migration, Admin setup, and password latency require verification. |
 | Candidate profiles | Draft wizard, claim, pending immutable revisions, visibility and suspension | Conservative publication policy awaits owner sign-off |
 | Discovery | Approved profile filter, details, saved searches, favorites, preference prefill and recommendations | Recommendation candidates are bounded to the 500 most recently published eligible profiles |
 | Matchmaking | Admin review, recipient response, mutual consent, final authorization, withdrawal, blocks, reports and contact revocation | Verified email scope only |

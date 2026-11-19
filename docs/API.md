@@ -42,7 +42,9 @@ HTTP 401 means sign-in is required, 403 means forbidden, 404 means unavailable t
 | Admin | GET /admin/moderation/{id}, POST /admin/privacy-requests/{id}/close | Restricted moderation reasons or close a fulfilled data request |
 | Admin | POST /admin/interests/{id}/decision, /admin/reports/{id}/close | action/version/reason or report close reason |
 | Admin | PUT /admin/profiles/{id}/suspension, /admin/accounts/{id}/suspension | suspended and reason |
-| Local test only | POST /_local/admin, /_local/reconcile | Guarded synthetic admin bootstrap and outbox replay |
+| Admin login | POST /admin/auth/login | `password` only. Returns the internally identified account and session credentials. |
+| Admin | POST /admin/auth/password | `currentPassword`, `newPassword`, `confirmPassword`. Success revokes all Admin sessions. |
+| Local test only | POST /_local/reconcile | Guarded outbox replay |
 
 Search filters include ID, age/height intervals, city/state/district/country, qualification/degree, occupation/employment type/income band, marital status, tradition/sub-community, diet, language, relocation and sort. Publication projections omit exact DOB, login identifiers, candidate name, family details and employer. Eligible profile details add preselected structured fields. Contact details use a separate, dynamically checked endpoint.
 

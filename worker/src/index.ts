@@ -15,6 +15,7 @@ import {
   unix,
 } from './core';
 import * as auth from './auth';
+import * as adminAuth from './admin-auth';
 import * as profile from './profiles';
 import * as discovery from './discovery';
 import * as matching from './matching';
@@ -67,10 +68,14 @@ route('GET', '/readiness', 'admin', async (c) => {
 });
 route('POST', '/auth/otp/request', 'public', (c) => auth.loginRequest(c, c.input), 202);
 route('POST', '/auth/otp/verify', 'public', (c) => auth.loginVerify(c, c.input));
+route('POST', '/admin/auth/login', 'public', (c) => adminAuth.login(c, c.input));
+route('POST', '/admin/auth/password', 'admin', (c) =>
+  adminAuth.changePassword(c.env, providerActor(c), c.input),
+);
 route('POST', '/auth/refresh', 'public', (c) => auth.refresh(c.env, c.input));
 route('POST', '/auth/logout', 'signed_in', (c) => auth.logout(c.env, providerActor(c)));
 route('POST', '/auth/claim-code', 'customer', (c) => auth.claimCode(c, providerActor(c)), 202);
-route('POST', '/auth/security-code', 'signed_in', (c) => auth.securityCode(c, providerActor(c)), 202);
+route('POST', '/auth/security-code', 'customer', (c) => auth.securityCode(c, providerActor(c)), 202);
 route('POST', '/auth/new-email-code', 'customer', (c) => auth.newEmailCode(c, c.input), 202);
 route('POST', '/auth/change-email', 'customer', (c) =>
   ops.changeEmail(c, providerActor(c), {
@@ -79,8 +84,10 @@ route('POST', '/auth/change-email', 'customer', (c) =>
     next: object(c.input.next),
   }),
 );
-route('POST', '/_local/admin', 'public', (c) => auth.fixtureAdmin(c, c.input), 201);
-route('GET', '/me', 'signed_in', (c) => ({ id: c.actor!.id, role: c.actor!.role, email: c.actor!.email }));
+route('GET', '/me', 'signed_in', (c) => {
+  const { id, role, email } = providerActor(c);
+  return role === 'admin' ? { id, role } : { id, role, email };
+});
 route('GET', '/profiles', 'customer', (c) => profile.myProfiles(c.env, providerActor(c)));
 route(
   'POST',

@@ -2,6 +2,7 @@ export interface Env {
   DB_MAIN: D1Database;
   DB_OPERATIONS: D1Database;
   AUTH_SECRET?: string;
+  ADMIN_PASSWORD_PEPPER?: string;
   BREVO_API_KEY?: string;
   BREVO_SENDER_EMAIL?: string;
   BREVO_SENDER_NAME?: string;

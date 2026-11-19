@@ -13,4 +13,6 @@ Start with [Windows setup](docs/SETUP.md). See [feature status](docs/FEATURES.md
 
 The production API base is https://jain-matrimonial-api.avtejasupadhye-9a.workers.dev. Local development uses isolated databases and synthetic fixture identities. Temporary file staging, live file transfer, SMS and Android push require separate provider configuration.
 
+The Windows Admin app opens with a single password field. The owner provisions the sole administrator through the private D1 setup script. Use Dashboard → Settings → Change Password to rotate it and end all Admin sessions. Android customer sign-in uses email OTP. See [Windows setup](docs/SETUP.md) and [production cutover](docs/DEPLOYMENT.md).
+
 See [native build and QA artifacts](docs/NATIVE_BUILDS.md) and the [continuation progress report](docs/PROGRESS.md).
