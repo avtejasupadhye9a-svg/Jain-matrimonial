@@ -18,12 +18,12 @@ Set-Location E:\J1\worker
 npx.cmd wrangler whoami
 npx.cmd wrangler deployments list
 npx.cmd wrangler secret list
-npx.cmd wrangler d1 migrations list DB_MAIN --remote
-npx.cmd wrangler d1 migrations list DB_OPERATIONS --remote
 npx.cmd wrangler d1 execute DB_MAIN --remote --command "SELECT name,sql FROM sqlite_schema WHERE name LIKE 'jm_%' ORDER BY name"
 npx.cmd wrangler d1 execute DB_OPERATIONS --remote --command "SELECT name,sql FROM sqlite_schema WHERE name LIKE 'jm_%' ORDER BY name"
 cloudflared tunnel info 5ce2883f-933e-49c8-ab01-014841037d0e
 ```
+
+If `jm_migrations` exists, run `SELECT name,applied_at FROM jm_migrations ORDER BY id` on that database through `d1 execute --remote`. Wrangler 4.164.0 initializes the migrations table during `d1 migrations list`. Use the SELECT-only inventory above before any production change is approved.
 
 ## Before requesting production approval
 

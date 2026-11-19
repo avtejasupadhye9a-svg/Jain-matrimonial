@@ -12,4 +12,6 @@ Artifact names
 - jain-matrimonial-customer-apk contains jain-matrimonial-customer.apk
 - jain-matrimonial-admin-windows-x64 contains jain-matrimonial-admin-windows-x64.zip
 
+The Admin and Cloudflare integration build passed on branch `ci/admin-cloudflare` at commit `23e8171`. Extract the inner Windows ZIP before launching the app. [Windows x64 QA artifact](https://github.com/avtejasupadhye9a-svg/Jain-matrimonial/actions/runs/44537658362/artifacts/14536003565)
+
 Use QA artifacts for testing. Android production release signing, a production distribution identifier, and any public store release require separate approval and configuration. See DEPLOYMENT.md for the Cloudflare migration, rollback and storage gates.
