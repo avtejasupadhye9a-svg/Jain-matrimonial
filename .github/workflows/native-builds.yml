@@ -44,6 +44,17 @@ jobs:
         run: |
           flutter config --no-analytics
           flutter config --jdk-dir "$JAVA_HOME"
+          init_dir="$HOME/.gradle/init.d"
+          mkdir -p "$init_dir"
+          cat > "$init_dir/flutter-plugin-repositories.gradle" <<'GRADLE'
+          gradle.beforeSettings { settings ->
+              settings.pluginManagement.repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          GRADLE
           flutter pub get --enforce-lockfile
           flutter analyze --no-pub
           flutter test --no-pub
