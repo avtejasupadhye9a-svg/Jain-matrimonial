@@ -18,7 +18,7 @@ env:
 jobs:
   android:
     name: Android customer APK
-    if: github.ref == 'refs/heads/ci/jain-matrimonial-native'
+    if: github.ref == 'refs/heads/ci/jain-matrimonial-native' || github.ref == 'refs/heads/ci/admin-cloudflare'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
