@@ -42,8 +42,23 @@ HTTP 401 means sign-in is required, 403 means forbidden, 404 means unavailable t
 | Admin | GET /admin/moderation/{id}, POST /admin/privacy-requests/{id}/close | Restricted moderation reasons or close a fulfilled data request |
 | Admin | POST /admin/interests/{id}/decision, /admin/reports/{id}/close | action/version/reason or report close reason |
 | Admin | PUT /admin/profiles/{id}/suspension, /admin/accounts/{id}/suspension | suspended and reason |
-| Local test only | POST /_local/admin, /_local/reconcile | Guarded synthetic admin bootstrap and outbox replay |
+| Admin login | POST /admin/auth/login | `password` only. Each successful login creates an independent session for the same internal account. |
+| Admin | POST /admin/auth/password | `currentPassword`, `newPassword`, `confirmPassword`. Success revokes all sessions for the account across devices. |
+| Local test only | POST /_local/reconcile | Guarded outbox replay |
+
+Admin passwords require 15 characters in production. The two-character policy requires a loopback request with the enabled local test fixture and matching fixture key.
 
 Search filters include ID, age/height intervals, city/state/district/country, qualification/degree, occupation/employment type/income band, marital status, tradition/sub-community, diet, language, relocation and sort. Publication projections omit exact DOB, login identifiers, candidate name, family details and employer. Eligible profile details add preselected structured fields. Contact details use a separate, dynamically checked endpoint.
 
 Discovery detail returns the current account favorite state. Interest lists support an optional exact id filter without bypassing participant and review visibility rules. Interest rows report whether contact can currently be read. Admin interest rows also report whether the current eligibility and mutual consent permit authorization.
+
+## Admin documents
+
+`GET /admin/profiles/{profileId}/documents` lists identity-document metadata and direct synchronization state. `PUT /admin/documents/{uuid}?profileId={profileId}` accepts an 8 MiB or smaller binary PDF, PNG or JPEG with the exact MIME type and lowercase hexadecimal `X-Content-SHA256`. Keep the UUID stable across retries with the original bytes. `GET /admin/documents/{uuid}` returns a verified attachment for a confirmed record. All three routes require an active administrator session. With private B2 staging configured and enabled, an upload can return a document in the `staged` state while the PC is offline. Only `confirmed` documents are downloadable. Transfers that cannot be accepted return `503 storage_unavailable`. See STORAGE.md for retry and receipt semantics. `GET /readiness` reports `disabled`, `unconfigured`, `offline` or `online` in `uploads`.
+
+
+## Managed permanent storage
+
+Admin sessions can read GET /admin/infrastructure and use POST /admin/infrastructure/enroll, /activate and /control under the same Admin prefix. A machine redeems its ticket at POST /storage/enrollment/claim with proof of the committed secret. The origin uses signed POST /storage/origin/backup requests to export paged metadata and receipts and record a manifest digest. These routes require the managed feature gate. Enrollment and backup handlers verify their own proofs; they do not grant anonymous storage access.
+
+Customers list their own files at GET /customer/profiles/{id}/files and submit a permitted document or photo at PUT /customer/files/{uuid}. Photo bytes require an authorized owner and confirmed integrity at GET /customer/files/{uuid}. Private document content requires an Admin session. All staging credentials stay at the Worker. Refer to STORAGE.md for retry, backup and verified readback behavior.

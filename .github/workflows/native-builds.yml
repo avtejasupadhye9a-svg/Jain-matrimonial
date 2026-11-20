@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - ci/jain-matrimonial-native
+      - ci/admin-cloudflare
 
 permissions:
   contents: read
@@ -17,6 +18,7 @@ env:
 jobs:
   android:
     name: Android customer APK
+    if: github.ref == 'refs/heads/ci/jain-matrimonial-native' || github.ref == 'refs/heads/ci/admin-cloudflare'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -33,12 +35,26 @@ jobs:
           git clone --depth 1 --branch "$FLUTTER_REF" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = "$FLUTTER_COMMIT"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+          sdk="$ANDROID_HOME/cmdline-tools"
+          sdkmanager="$(find "$sdk" -type f -path '*/bin/sdkmanager' -print -quit)"
+          test -n "$sdkmanager"
+          "$sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
       - name: Analyze, test, and build APK
         working-directory: customer_app
         run: |
           flutter config --no-analytics
           flutter config --jdk-dir "$JAVA_HOME"
+          init_dir="$HOME/.gradle/init.d"
+          mkdir -p "$init_dir"
+          cat > "$init_dir/flutter-plugin-repositories.gradle" <<'GRADLE'
+          gradle.beforeSettings { settings ->
+              settings.pluginManagement.repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          GRADLE
           flutter pub get --enforce-lockfile
           flutter analyze --no-pub
           flutter test --no-pub
@@ -89,21 +105,52 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           flutter build windows --release --no-pub
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $bundle = 'build/windows/x64/runner/Release'
-          foreach ($item in 'jain_admin.exe','flutter_windows.dll','data/flutter_assets') {
+          $bundle = (Resolve-Path 'build/windows/x64/runner/Release').Path
+          foreach ($item in 'jain_admin.exe','flutter_windows.dll','data/app.so','data/icudtl.dat','data/flutter_assets','flutter_secure_storage_windows_plugin.dll','file_selector_windows_plugin.dll') {
             if (!(Test-Path (Join-Path $bundle $item))) { throw "Missing runtime item $item" }
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest -property installationPath
+          if (!$vs) { throw 'Visual C++ runtime not found on the runner' }
+          $crt = Get-ChildItem (Join-Path $vs 'VC/Redist/MSVC') -Recurse -File -Filter 'msvcp140.dll' |
+            Where-Object { $_.FullName -match '\\x64\\Microsoft\.VC[0-9]+\.CRT\\msvcp140\.dll$' } |
+            Sort-Object { [version]::new($_.VersionInfo.FileMajorPart, $_.VersionInfo.FileMinorPart, $_.VersionInfo.FileBuildPart, $_.VersionInfo.FilePrivatePart) } -Descending |
+            Select-Object -First 1
+          if (!$crt) { throw 'Visual C++ x64 runtime files not found' }
+          Copy-Item (Join-Path $crt.DirectoryName '*.dll') $bundle
+          foreach ($item in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
+            if (!(Test-Path (Join-Path $bundle $item))) { throw "Missing Visual C++ runtime $item" }
+          }
+          $app = Start-Process -FilePath (Join-Path $bundle 'jain_admin.exe') -WorkingDirectory $bundle -WindowStyle Hidden -PassThru
+          try {
+            if ($app.WaitForExit(8000)) { throw "Admin exited at startup with code $($app.ExitCode)" }
+          } finally {
+            if (!$app.HasExited) { Stop-Process -InputObject $app }
           }
           $output = Join-Path $env:GITHUB_WORKSPACE 'native-artifacts'
           New-Item -ItemType Directory $output | Out-Null
           $zip = Join-Path $output 'jain-matrimonial-admin-windows-x64.zip'
           Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $zip
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $files = @($archive.Entries | Where-Object Length -gt 0 |
+              ForEach-Object { $_.FullName.Replace('\', '/') })
+            foreach ($item in 'jain_admin.exe','flutter_windows.dll','data/app.so','data/icudtl.dat','flutter_secure_storage_windows_plugin.dll','file_selector_windows_plugin.dll','msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
+              if ($item -cnotin $files) { throw "ZIP missing $item" }
+            }
+            if (!($files -clike 'data/flutter_assets/*')) { throw 'ZIP missing Flutter assets' }
+          } finally {
+            $archive.Dispose()
+          }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  jain-matrimonial-admin-windows-x64.zip" | Set-Content (Join-Path $output 'SHA256SUMS.txt')
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: windows
         with:
           name: jain-matrimonial-admin-windows-x64
-          path: native-artifacts/
+          path: |
+            native-artifacts/jain-matrimonial-admin-windows-x64.zip
+            native-artifacts/SHA256SUMS.txt
           if-no-files-found: error
       - name: Link Windows artifact
         shell: pwsh

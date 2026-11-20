@@ -29,6 +29,15 @@ interface Outbox {
   created_at: string;
 }
 
+const adminNotificationActions = new Set([
+  'profile.submitted',
+  'claim.requested',
+  'interest.requested',
+  'interest.pending_contact_authorization',
+  'report.opened',
+  'privacy.requested',
+]);
+
 export async function reconcile(env: Env) {
   const events = await rows<Outbox>(
     env.DB_MAIN,
@@ -71,6 +80,30 @@ export async function reconcile(env: Env) {
           unix(),
         ),
       );
+    }
+    if (adminNotificationActions.has(event.action)) {
+      // Consent transitions may emit one event per customer. Notify each admin once.
+      const source =
+        event.action === 'interest.pending_contact_authorization'
+          ? event.id.split(':').slice(0, 2).join(':')
+          : event.id;
+      const admins = await rows<{ id: string }>(
+        env.DB_MAIN,
+        "SELECT a.id FROM jm_admin_credentials c JOIN jm_accounts a ON a.id=c.account_id WHERE c.slot=1 AND a.role='admin' AND a.status='active'",
+      );
+      for (const admin of admins) {
+        updates.push(
+          statement(
+            ops,
+            'INSERT OR IGNORE INTO jm_notifications VALUES(?,?,?,?,?,NULL)',
+            source + ':admin:' + admin.id,
+            admin.id,
+            event.action,
+            event.entity_id,
+            event.created_at,
+          ),
+        );
+      }
     }
     await ops.batch(updates);
     await change(
@@ -302,7 +335,7 @@ const adminQueries = {
     FROM jm_claims c JOIN jm_profiles p ON p.id=c.profile_id JOIN jm_accounts a ON a.id=c.account_id
     WHERE c.status='pending' ORDER BY c.created_at,c.id`,
   accounts: `SELECT id,email,status,role,created_at AS createdAt FROM jm_accounts
-    WHERE (? IS NULL OR id=? OR instr(lower(email),lower(?))>0) ORDER BY created_at DESC,id DESC`,
+    WHERE role='customer' AND (? IS NULL OR id=? OR instr(lower(email),lower(?))>0) ORDER BY created_at DESC,id DESC`,
   reports: `SELECT id,reporter_id AS reporterId,profile_id AS profileId,reason,status,created_at AS createdAt
     FROM jm_reports ORDER BY status DESC,created_at DESC,id DESC`,
   blocks: `SELECT account_id AS accountId,blocked_id AS blockedId,created_at AS createdAt

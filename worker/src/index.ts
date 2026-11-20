@@ -15,11 +15,14 @@ import {
   unix,
 } from './core';
 import * as auth from './auth';
+import * as adminAuth from './admin-auth';
 import * as profile from './profiles';
 import * as discovery from './discovery';
 import * as matching from './matching';
 import * as ops from './operations';
 import * as moderation from './moderation';
+import * as storage from './storage';
+import * as infra from './infrastructure';
 
 interface Context extends auth.AuthContext {
   url: URL;
@@ -51,6 +54,36 @@ function route(
 const providerActor = (c: Context) => c.actor!;
 const id = (c: Context) => c.id!;
 
+route('GET', '/admin/infrastructure', 'admin', (c) => infra.status(c.env));
+route('POST', '/admin/infrastructure/enroll', 'admin', (c) => infra.enroll(c.env, providerActor(c), c.input));
+route('POST', '/admin/infrastructure/activate', 'admin', (c) =>
+  infra.promote(c.env, providerActor(c), c.input),
+);
+route('POST', '/admin/infrastructure/control', 'admin', (c) =>
+  infra.transition(c.env, providerActor(c), c.input),
+);
+route('POST', '/storage/origin/backup', 'public', (c) => infra.backupApi(c.env, c.input));
+route('POST', '/storage/enrollment/claim', 'public', async (c) => {
+  await rate(
+    c.env.DB_MAIN,
+    'origin-claim:' + (c.request.headers.get('cf-connecting-ip') ?? 'unknown'),
+    20,
+    300,
+  );
+  return infra.claim(c.env, c.input);
+});
+route('GET', '/customer/profiles/:id/files', 'customer', (c) =>
+  storage.ownFiles(c.env, providerActor(c), id(c), c.url),
+);
+route('GET', '/customer/files/:id', 'customer', async (c) => {
+  const f = await storage.download(c.env, providerActor(c), id(c));
+  return new Response(f.data, {
+    headers: { 'content-type': f.mime, 'content-disposition': 'attachment', 'x-content-sha256': f.sha256 },
+  });
+});
+route('PUT', '/customer/files/:id', 'customer', (c) =>
+  storage.upload(c.env, providerActor(c), id(c), c.request, c.url),
+);
 route('GET', '/health', 'public', () => ({ status: 'ok' }));
 route('GET', '/readiness', 'admin', async (c) => {
   await Promise.all([
@@ -60,16 +93,18 @@ route('GET', '/readiness', 'admin', async (c) => {
   return {
     status: 'ok',
     emailConfigured: auth.mailConfigured(c.env),
-    uploads: 'unavailable',
+    uploads: await storage.storageStatus(c.env),
     push: 'unavailable',
   };
 });
 route('POST', '/auth/otp/request', 'public', (c) => auth.loginRequest(c, c.input), 202);
 route('POST', '/auth/otp/verify', 'public', (c) => auth.loginVerify(c, c.input));
+route('POST', '/admin/auth/login', 'public', (c) => adminAuth.login(c, c.input));
+route('POST', '/admin/auth/password', 'admin', (c) => adminAuth.changePassword(c.env, providerActor(c), c.input));
 route('POST', '/auth/refresh', 'public', (c) => auth.refresh(c.env, c.input));
 route('POST', '/auth/logout', 'signed_in', (c) => auth.logout(c.env, providerActor(c)));
 route('POST', '/auth/claim-code', 'customer', (c) => auth.claimCode(c, providerActor(c)), 202);
-route('POST', '/auth/security-code', 'signed_in', (c) => auth.securityCode(c, providerActor(c)), 202);
+route('POST', '/auth/security-code', 'customer', (c) => auth.securityCode(c, providerActor(c)), 202);
 route('POST', '/auth/new-email-code', 'customer', (c) => auth.newEmailCode(c, c.input), 202);
 route('POST', '/auth/change-email', 'customer', (c) =>
   ops.changeEmail(c, providerActor(c), {
@@ -78,8 +113,10 @@ route('POST', '/auth/change-email', 'customer', (c) =>
     next: object(c.input.next),
   }),
 );
-route('POST', '/_local/admin', 'public', (c) => auth.fixtureAdmin(c, c.input), 201);
-route('GET', '/me', 'signed_in', (c) => ({ id: c.actor!.id, role: c.actor!.role, email: c.actor!.email }));
+route('GET', '/me', 'signed_in', (c) => {
+  const { id, role, email } = providerActor(c);
+  return role === 'admin' ? { id, role } : { id, role, email };
+});
 route('GET', '/profiles', 'customer', (c) => profile.myProfiles(c.env, providerActor(c)));
 route(
   'POST',
@@ -201,6 +238,21 @@ route('POST', '/notifications/:notification/read', 'signed_in', (c) =>
   ops.readNotification(c.env, providerActor(c), id(c)),
 );
 route('GET', '/admin/dashboard', 'admin', (c) => ops.dashboard(c.env));
+route('GET', '/admin/profiles/:id/documents', 'admin', (c) => storage.documents(c.env, id(c), c.url));
+route('PUT', '/admin/documents/:id', 'admin', (c) =>
+  storage.upload(c.env, providerActor(c), id(c), c.request, c.url),
+);
+route('GET', '/admin/documents/:id', 'admin', async (c) => {
+  const file = await storage.download(c.env, providerActor(c), id(c));
+  return new Response(file.data, {
+    headers: {
+      'content-type': file.mime,
+      'content-disposition': 'attachment',
+      'content-security-policy': "default-src 'none'; sandbox",
+      'x-content-sha256': file.sha256,
+    },
+  });
+});
 for (const queue of ops.adminQueues)
   route('GET', '/admin/' + queue, 'admin', (c) => ops.adminList(c.env, c.url, queue));
 route(
@@ -386,9 +438,18 @@ async function fetchApi(request: Request, env: Env, ctx: ExecutionContext) {
         if (request.method !== 'GET') await rate(env.DB_MAIN, 'write:' + c.actor.id, 120, 300);
       }
       c.id = hit.id && !selected.path.includes(':notification') ? identifier(hit.id) : hit.id;
-      if (['POST', 'PUT'].includes(request.method)) c.input = await body(request);
+      if (
+        ['POST', 'PUT'].includes(request.method) &&
+        !['/admin/documents/:id', '/customer/files/:id'].includes(selected.path)
+      )
+        c.input = await body(request);
       const result = await execute(c, selected);
-      if (c.actor && request.method !== 'GET') ctx.waitUntil(ops.reconcile(env).catch(() => undefined));
+      if (c.actor && (request.method !== 'GET' || result instanceof Response))
+        ctx.waitUntil(ops.reconcile(env).catch(() => undefined));
+      if (result instanceof Response) {
+        result.headers.forEach((value, key) => headers.set(key, value));
+        return new Response(result.body, { status: result.status, headers });
+      }
       return reply(selected.status, { code: 'ok', message: 'Request completed.', requestId, data: result });
     }
     return missing();
@@ -408,6 +469,7 @@ async function fetchApi(request: Request, env: Env, ctx: ExecutionContext) {
 export default {
   fetch: fetchApi,
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(storage.syncPending(env));
     ctx.waitUntil(
       (async () => {
         await matching.expireInterests(env);

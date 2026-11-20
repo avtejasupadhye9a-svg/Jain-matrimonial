@@ -90,6 +90,11 @@ async function requestCode(
   ]);
   await rate(db, 'issue-ip:' + ipBucket, 25, 900);
   await rate(db, 'issue-email:' + addressBucket, 5, 3600);
+  if (
+    purpose === 'login' &&
+    (await statement(db, "SELECT id FROM jm_accounts WHERE email=? AND role='admin'", address).first())
+  )
+    return { challengeId: uid() };
   const id = uid();
   const code = otpCode();
   const time = unix();
@@ -181,7 +186,8 @@ export async function loginVerify(context: AuthContext, data: JsonObject) {
   const account = await statement(
     db,
     `INSERT INTO jm_accounts(id,email,verified_at,created_at)
-    VALUES(?,?,?,?) ON CONFLICT(email) DO UPDATE SET verified_at=excluded.verified_at WHERE jm_accounts.status='active'
+    VALUES(?,?,?,?) ON CONFLICT(email) DO UPDATE SET verified_at=excluded.verified_at
+    WHERE jm_accounts.status='active' AND jm_accounts.role='customer'
     RETURNING id,email,role`,
     uid(),
     address,
@@ -189,32 +195,72 @@ export async function loginVerify(context: AuthContext, data: JsonObject) {
     time,
   ).first<{ id: string; email: string; role: string }>();
   if (!account) return unauthorized();
+  return issueSession(context.env, account);
+}
+
+const adminSessionCurrent = (account: string, session: string) => `EXISTS(
+  SELECT 1 FROM jm_admin_credentials c JOIN jm_admin_session_versions v ON v.version=c.version
+  WHERE c.slot=1 AND c.account_id=${account} AND v.session_id=${session}
+)`;
+
+export async function issueSession(
+  env: Env,
+  account: { id: string; role: string; email?: string },
+  adminVersion?: number,
+) {
+  const db = env.DB_MAIN;
   const token = await newTokens();
   const seconds = unix();
-  await statement(
-    db,
-    'INSERT INTO jm_sessions VALUES(?,?,?,?,?,?,?,NULL)',
-    uid(),
+  const sessionId = uid();
+  const shortSession = typeof adminVersion === 'number';
+  const values = [
+    sessionId,
     account.id,
     token.accessHash,
     token.refreshHash,
     seconds + 900,
-    seconds + 2592000,
+    seconds + (shortSession ? 28800 : 2592000),
     seconds,
-  ).run();
+  ];
+  if (shortSession) {
+    const [, session] = await db.batch([
+      statement(
+        db,
+        `INSERT INTO jm_admin_session_versions(session_id,version)
+        SELECT ?,c.version FROM jm_admin_credentials c JOIN jm_accounts a ON a.id=c.account_id
+        WHERE c.slot=1 AND c.account_id=? AND c.version=? AND a.status='active' AND a.role='admin'`,
+        sessionId,
+        account.id,
+        adminVersion,
+      ),
+      statement(
+        db,
+        `INSERT INTO jm_sessions SELECT ?,?,?,?,?,?,?,NULL
+        WHERE EXISTS(SELECT 1 FROM jm_admin_session_versions WHERE session_id=?)`,
+        ...values,
+        sessionId,
+      ),
+    ]);
+    if (!session.meta.changes) return unauthorized();
+  } else {
+    await statement(db, 'INSERT INTO jm_sessions VALUES(?,?,?,?,?,?,?,NULL)', ...values).run();
+  }
   return { account, accessToken: token.accessToken, refreshToken: token.refreshToken, expiresIn: 900 };
 }
 
 export async function authenticate(context: AuthContext): Promise<Actor> {
   const token = context.request.headers.get('authorization')?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];
   if (!token) return unauthorized();
+  const time = unix();
   const actor = await statement(
     context.env.DB_MAIN,
     `SELECT a.id,a.email,a.role,s.id AS sessionId
     FROM jm_sessions s JOIN jm_accounts a ON a.id=s.account_id
-    WHERE s.access_hash=? AND s.access_until>? AND s.revoked_at IS NULL AND a.status='active'`,
+    WHERE s.access_hash=? AND s.access_until>? AND s.revoked_at IS NULL AND a.status='active'
+      AND (a.role='customer' OR (s.refresh_until>? AND ${adminSessionCurrent('a.id', 's.id')}))`,
     await digest(token),
-    unix(),
+    time,
+    time,
   ).first<Actor>();
   return actor ?? unauthorized();
 }
@@ -227,7 +273,8 @@ export async function refresh(env: Env, data: JsonObject) {
     env.DB_MAIN,
     `UPDATE jm_sessions SET access_hash=?,refresh_hash=?,access_until=?,rotated_at=?
     WHERE refresh_hash=? AND refresh_until>? AND revoked_at IS NULL
-    AND EXISTS(SELECT 1 FROM jm_accounts WHERE id=account_id AND status='active')`,
+    AND EXISTS(SELECT 1 FROM jm_accounts a WHERE a.id=jm_sessions.account_id AND a.status='active'
+      AND (a.role='customer' OR ${adminSessionCurrent('a.id', 'jm_sessions.id')}))`,
     next.accessHash,
     next.refreshHash,
     time + 900,
@@ -247,21 +294,4 @@ export async function logout(env: Env, actor: Actor) {
     actor.sessionId,
   );
   return {};
-}
-
-export async function fixtureAdmin(context: AuthContext, data: JsonObject) {
-  if (!localFixture(context)) throw new Failure(404, 'not_found', 'The requested record is unavailable.');
-  const address = email(data.email);
-  if (!address.endsWith('@example.test')) return invalid('email', 'Use a synthetic example.test identity.');
-  const time = now();
-  const account = await statement(
-    context.env.DB_MAIN,
-    `INSERT INTO jm_accounts(id,email,role,verified_at,created_at)
-    VALUES(?,?,'admin',?,?) ON CONFLICT(email) DO UPDATE SET role='admin' RETURNING id`,
-    uid(),
-    address,
-    time,
-    time,
-  ).first();
-  return account;
 }

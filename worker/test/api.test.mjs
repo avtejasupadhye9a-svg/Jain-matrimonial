@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, pbkdf2Sync, randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { test } from 'node:test';
 import { build } from 'esbuild';
 import { unstable_dev } from 'wrangler';
 
-const secret = 'local-test-fixture-key-of-at-least-32-characters';
+const secret = randomBytes(32).toString('hex');
+const pepper = randomBytes(32);
+const makePassword = () => randomBytes(24).toString('hex');
+const originalPassword = makePassword();
+const legacyAdminEmail = 'admin@example.test';
+const adminId = randomUUID();
+const otherAdminId = randomUUID();
 const harness = `
 import app from './src/index.ts';
 import { deliverEmails } from './src/operations.ts';
@@ -20,6 +27,11 @@ export default {
         return deliverEmails({...env, BREVO_API_KEY: 'unused', BREVO_SENDER_EMAIL: 'sender@example.test'},
           async () => new Response(null, {status: 503})).then(() => Response.json({ok: true}));
       }
+    }
+    const origin = request.headers.get('x-test-storage-origin');
+    if (origin && request.headers.get('x-local-fixture-key') === env.LOCAL_FIXTURE_KEY) {
+      env = {...env, FILE_TRANSFER_ENABLED: 'true', STORAGE_LOCAL_URL: origin,
+        STORAGE_ORIGIN_TOKEN: request.headers.get('x-test-storage-token') || env.LOCAL_FIXTURE_KEY};
     }
     return app.fetch(request, env, ctx);
   },
@@ -86,6 +98,7 @@ async function setup() {
     envFiles: [varsFile],
     vars: {
       AUTH_SECRET: secret,
+      ADMIN_PASSWORD_PEPPER: pepper.toString('hex'),
       LOCAL_FIXTURE_KEY: secret,
       JAIN_LOCAL_TEST: 'true',
       BREVO_API_KEY: '',
@@ -100,14 +113,14 @@ async function setup() {
   });
 }
 
-async function sqlBatch(database, queries) {
+async function sqlBatch(database, queries, status = 200) {
   const response = await fetch('http://127.0.0.1:' + instance.port + '/__test-db', {
     method: 'POST',
     headers: { 'x-local-fixture-key': secret },
     body: JSON.stringify({ database, queries }),
   });
   const payload = await response.json();
-  assert.equal(response.status, 200, JSON.stringify(payload));
+  assert.equal(response.status, status, 'Unexpected local D1 status for ' + database);
   return payload;
 }
 async function request(
@@ -115,11 +128,12 @@ async function request(
   path,
   token,
   input,
-  { status = 200, key = randomUUID(), fixtures = true } = {},
+  { status = 200, key = randomUUID(), fixtures = true, ip } = {},
 ) {
   const headers = { 'Idempotency-Key': key };
   if (token) headers.Authorization = 'Bearer ' + token;
   if (fixtures) headers['x-local-fixture-key'] = secret;
+  if (ip) headers['cf-connecting-ip'] = ip;
   if (input !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch('http://127.0.0.1:' + instance.port + path, {
     method,
@@ -127,7 +141,7 @@ async function request(
     body: input === undefined ? undefined : JSON.stringify(input),
   });
   const json = await response.json();
-  assert.equal(response.status, status, method + ' ' + path + ' ' + JSON.stringify(json));
+  assert.equal(response.status, status, method + ' ' + path + ' returned an unexpected status');
   assert.equal(typeof json.requestId, 'string');
   return status < 400 ? json.data : json;
 }
@@ -136,6 +150,48 @@ const otp = (email) => request('POST', '/auth/otp/request', null, { email }, { s
 const verify = (code) =>
   request('POST', '/auth/otp/verify', null, { challengeId: code.challengeId, code: code.localTestCode });
 const as = (account) => account.accessToken;
+const adminLogin = (password, options) =>
+  request('POST', '/admin/auth/login', null, { password }, { fixtures: false, ...options });
+const setCredential = (currentPassword, newPassword, confirmPassword = newPassword) => ({
+  currentPassword,
+  newPassword,
+  confirmPassword,
+});
+
+function fixtureVerifier(password) {
+  const salt = randomBytes(32);
+  const material = createHmac('sha256', pepper).update(password).digest();
+  const result = pbkdf2Sync(material, salt, 100_000, 32, 'sha256');
+  return `pbkdf2-sha256-100k:v1:${salt.toString('hex')}:${result.toString('hex')}`;
+}
+
+async function startStorage(directory) {
+  const origin = spawn(
+    'python',
+    [
+      '-u',
+      '-c',
+      'import sys; from local_storage_service.service import Storage,server; s=server(Storage(sys.argv[1],lambda *_:True),sys.argv[2],0); print(s.server_port,flush=True); s.serve_forever()',
+      directory,
+      secret,
+    ],
+    { cwd: process.env.JAIN_STORAGE_REPO || resolve('..'), stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  const [port] = await Promise.race([
+    once(origin.stdout, 'data'),
+    once(origin, 'exit').then(([code]) => {
+      throw new Error('Python origin exited: ' + code);
+    }),
+  ]);
+  const stop = async () => {
+    if (origin.exitCode !== null || origin.signalCode !== null) return;
+    const closed = once(origin, 'exit');
+    origin.kill();
+    await closed;
+  };
+  return { url: 'http://127.0.0.1:' + String(port).trim(), stop };
+}
+
 const draft = (name = 'Synthetic Candidate', occupation = 'Engineer') => ({
   name,
   dob: '1995-05-05',
@@ -219,8 +275,68 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     );
   });
 
-  await request('POST', '/_local/admin', null, { email: 'admin@example.test' }, { status: 201 });
-  const admin = await verify(await otp('admin@example.test'));
+  assert.equal((await adminLogin(originalPassword, { status: 503 })).code, 'admin_sign_in_unavailable');
+  const savedVerifier = fixtureVerifier(originalPassword);
+  await sqlBatch(
+    'DB_MAIN',
+    [
+      {
+        sql: "INSERT INTO jm_admin_credentials VALUES(1,?,?,1,datetime('now'))",
+        params: [adminId, savedVerifier.slice(0, -1) + 'z'],
+      },
+    ],
+    500,
+  );
+  await sqlBatch('DB_MAIN', [
+    {
+      sql: "INSERT INTO jm_accounts VALUES(?,?,'admin','active',datetime('now'),datetime('now'))",
+      params: [adminId, legacyAdminEmail],
+    },
+    {
+      sql: "INSERT INTO jm_accounts VALUES(?,?,'admin','active',datetime('now'),datetime('now'))",
+      params: [otherAdminId, 'retired-admin@example.test'],
+    },
+    {
+      sql: "INSERT INTO jm_admin_credentials VALUES(1,?,?,1,datetime('now'))",
+      params: [adminId, savedVerifier],
+    },
+  ]);
+  await sqlBatch(
+    'DB_MAIN',
+    [
+      {
+        sql: "INSERT INTO jm_admin_credentials VALUES(1,?,?,1,datetime('now'))",
+        params: [otherAdminId, savedVerifier],
+      },
+    ],
+    500,
+  );
+  for (const query of [
+    {
+      sql: "INSERT OR REPLACE INTO jm_admin_credentials VALUES(1,?,?,1,datetime('now'))",
+      params: [otherAdminId, savedVerifier],
+    },
+    { sql: 'DELETE FROM jm_admin_credentials WHERE slot=1', params: [] },
+    {
+      sql: 'UPDATE jm_admin_credentials SET account_id=?,version=version+1,verifier=? WHERE slot=1',
+      params: [otherAdminId, fixtureVerifier(makePassword())],
+    },
+  ]) {
+    await sqlBatch('DB_MAIN', [query], 500);
+  }
+  await sqlBatch(
+    'DB_MAIN',
+    [
+      {
+        sql: 'INSERT INTO jm_sessions VALUES(?,?,?,?,unixepoch()+900,unixepoch()+900,unixepoch(),NULL)',
+        params: [randomUUID(), otherAdminId, makePassword(), makePassword()],
+      },
+    ],
+    500,
+  );
+  const admin = await adminLogin(originalPassword);
+  assert.deepEqual(admin.account, { id: adminId, role: 'admin' });
+  assert.deepEqual(await request('GET', '/me', as(admin)), admin.account);
   const sender = await verify(await otp('sender@example.test'));
   const recipient = await verify(await otp('recipient@example.test'));
   const viewer = await verify(await otp('viewer@example.test'));
@@ -233,7 +349,7 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     async () => {
       first = await published(sender, admin, draft('Synthetic Sender'));
       second = await published(recipient, admin, draft('Synthetic Recipient', 'Designer'));
-      assert.equal((await request('GET', '/readiness', as(admin))).uploads, 'unavailable');
+      assert.equal((await request('GET', '/readiness', as(admin))).uploads, 'disabled');
       await request('GET', '/files', as(sender), undefined, { status: 503 });
       await request('GET', '/profiles/' + first.id, as(viewer), undefined, { status: 404 });
       const page =
@@ -353,6 +469,17 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
       { status: 201 },
     );
     const wrong = await request('POST', '/auth/claim-code', as(viewer), {}, { status: 202 });
+    const revision = await request(
+      'POST',
+      '/profiles/' + account.id + '/submit',
+      as(admin),
+      { version: account.version },
+      { status: 201 },
+    );
+    await request('POST', '/admin/revisions/' + revision.id + '/decision', as(admin), {
+      decision: 'approved',
+    });
+    assert.equal((await request('GET', '/profiles/' + account.id, as(admin))).publication.id, revision.id);
     await request(
       'POST',
       '/profiles/claim',
@@ -495,5 +622,237 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     assert.equal((await request('GET', endpoint, as(sender))).unread, before.unread);
     await request('POST', endpoint + '/' + notification + '/read', as(sender), {});
     assert.equal((await request('GET', endpoint, as(sender))).unread, before.unread - 1);
+    const adminBefore = await request('GET', endpoint, as(admin));
+    const review = adminBefore.items.find((item) => item.kind === 'profile.submitted');
+    assert(review);
+    await request('POST', endpoint + '/' + review.id + '/read', as(viewer), {});
+    assert.equal((await request('GET', endpoint, as(admin))).unread, adminBefore.unread);
+    await request('POST', endpoint + '/' + review.id + '/read', as(admin), {});
+    assert.equal((await request('GET', endpoint, as(admin))).unread, adminBefore.unread - 1);
+  });
+
+  await t.test(
+    'admin documents are private, verified, and retryable after the PC is unavailable',
+    async (storageTest) => {
+      const directory = resolve(await mkdtemp('.wrangler/objects'));
+      const origin = await startStorage(directory);
+      storageTest.after(origin.stop);
+      const png = Buffer.from('89504e470d0a1a0a73796e746865746963', 'hex');
+      const checksum = createHash('sha256').update(png).digest('hex');
+      const file = randomUUID();
+      const retry = randomUUID();
+      const docs = '/admin/profiles/' + first.id + '/documents';
+      async function transfer(
+        method,
+        path,
+        { target = origin.url, token = as(admin), hash = checksum, status = 200, originToken } = {},
+      ) {
+        const headers = { 'x-local-fixture-key': secret, 'x-test-storage-origin': target };
+        if (token) headers.Authorization = 'Bearer ' + token;
+        if (originToken) headers['x-test-storage-token'] = originToken;
+        if (method === 'PUT') {
+          headers['Content-Type'] = 'image/png';
+          headers['X-Content-SHA256'] = hash;
+        }
+        const response = await fetch('http://127.0.0.1:' + instance.port + path, {
+          method,
+          headers,
+          body: method === 'PUT' ? png : undefined,
+        });
+        assert.equal(response.status, status, response.status === status ? '' : await response.text());
+        return response;
+      }
+      const url = (id) => '/admin/documents/' + id;
+      const upload = (id, options) => transfer('PUT', url(id) + '?profileId=' + first.id, options);
+      await transfer('GET', docs, { token: null, status: 401 });
+      await transfer('GET', docs, { token: as(sender), status: 403 });
+      await upload(file, { token: 'a'.repeat(64), status: 401 });
+      await upload(file, { hash: '0'.repeat(64), status: 422 });
+      await upload(file, { originToken: 'x'.repeat(32), status: 503 });
+      assert.equal((await (await transfer('GET', '/readiness')).json()).data.uploads, 'online');
+      assert.equal((await (await upload(file)).json()).data.state, 'confirmed');
+      await upload(file);
+      await transfer('GET', url(file), { token: as(sender), status: 403 });
+      const download = await transfer('GET', url(file));
+      assert.equal(download.headers.get('cache-control'), 'no-store');
+      assert.equal(download.headers.get('content-disposition'), 'attachment');
+      assert.deepEqual(Buffer.from(await download.arrayBuffer()), png);
+      await origin.stop();
+      await upload(retry, { status: 503 });
+      await transfer('GET', url(file), { status: 503 });
+      const failed = (await (await transfer('GET', docs)).json()).data.items;
+      assert.equal(failed.find((row) => row.id === retry).state, 'failed');
+      const restarted = await startStorage(directory);
+      storageTest.after(restarted.stop);
+      assert.equal((await (await upload(retry, { target: restarted.url })).json()).data.state, 'confirmed');
+      await writeFile(resolve(directory, file), 'synthetic corrupted bytes');
+      await transfer('GET', url(file), { target: restarted.url, status: 503 });
+      await request('POST', '/_local/reconcile', null, {});
+      const [audit] = await sqlBatch('DB_OPERATIONS', [
+        { sql: 'SELECT action FROM jm_audit WHERE entity_id=?', params: [file] },
+      ]);
+      assert.deepEqual(audit.results.map((row) => row.action).sort(), [
+        'storage.confirmed',
+        'storage.download_failed',
+        'storage.download_failed',
+        'storage.downloaded',
+        'storage.upload_failed',
+      ]);
+    },
+  );
+
+  let passwordAfterRotation;
+  await t.test('one password-only administrator, throttling and atomic session revocation', async () => {
+    const dummy = await otp(legacyAdminEmail);
+    assert.deepEqual(Object.keys(dummy), ['challengeId']);
+    await request(
+      'POST',
+      '/auth/otp/verify',
+      null,
+      { challengeId: dummy.challengeId, code: '000000' },
+      { status: 400 },
+    );
+    await request('POST', '/admin/auth/setup', null, {}, { status: 404 });
+    await request('POST', '/admin/auth/recover', null, {}, { status: 404 });
+    await request('POST', '/admin/auth/password', null, {}, { status: 401 });
+    await request('POST', '/admin/auth/password', as(viewer), {}, { status: 403 });
+    assert(
+      (await request('GET', '/admin/accounts', as(admin))).items.every((row) => row.role === 'customer'),
+    );
+
+    const rateIp = '192.0.2.25';
+    for (let i = 0; i < 6; i++) {
+      const wrong = await adminLogin(makePassword(), { status: 401, ip: rateIp });
+      assert.equal(wrong.code, 'invalid_admin_password');
+    }
+    await adminLogin(originalPassword, { status: 429, ip: rateIp });
+    const alternate = await adminLogin(originalPassword, { ip: '192.0.2.26' });
+    assert.equal(alternate.account.id, admin.account.id);
+    assert(admin.accessToken !== alternate.accessToken);
+    await Promise.all([
+      request('GET', '/admin/dashboard', as(admin), undefined, { ip: '192.0.2.27' }),
+      request('GET', '/admin/dashboard', as(alternate), undefined, { ip: '192.0.2.26' }),
+    ]);
+    const next = makePassword();
+    await request('POST', '/admin/auth/password', as(admin), setCredential(makePassword(), next), {
+      status: 403,
+    });
+    await request(
+      'POST',
+      '/admin/auth/password',
+      as(admin),
+      setCredential(originalPassword, next, makePassword()),
+      { status: 400 },
+    );
+    await request('POST', '/admin/auth/password', as(admin), setCredential(originalPassword, ''), {
+      status: 400,
+      fixtures: false,
+    });
+    await request(
+      'POST',
+      '/admin/auth/password',
+      as(admin),
+      setCredential(originalPassword, originalPassword),
+      { status: 400 },
+    );
+    const replacement = makePassword();
+    const competing = await Promise.all(
+      [next, replacement].map(async (candidate) => {
+        const response = await fetch('http://127.0.0.1:' + instance.port + '/admin/auth/password', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + as(admin), 'Content-Type': 'application/json' },
+          body: JSON.stringify(setCredential(originalPassword, candidate)),
+        });
+        return { status: response.status, candidate };
+      }),
+    );
+    const successes = competing.filter((result) => result.status === 200);
+    assert.equal(successes.length, 1);
+    passwordAfterRotation = successes[0].candidate;
+    assert([401, 409].includes(competing.find((result) => result.status !== 200).status));
+    for (const revoked of [admin, alternate]) {
+      await request('GET', '/admin/dashboard', as(revoked), undefined, { status: 401 });
+      await request('POST', '/auth/refresh', null, { refreshToken: revoked.refreshToken }, { status: 401 });
+    }
+    await adminLogin(originalPassword, { status: 401 });
+    const newAdmin = await adminLogin(successes[0].candidate);
+    assert.equal((await request('GET', '/me', as(newAdmin))).id, adminId);
+    const rotated = await request('POST', '/auth/refresh', null, { refreshToken: newAdmin.refreshToken });
+    await request('POST', '/auth/refresh', null, { refreshToken: newAdmin.refreshToken }, { status: 401 });
+    await request('POST', '/auth/logout', as(rotated), {});
+    await request('GET', '/admin/dashboard', as(rotated), undefined, { status: 401 });
+    const [credentials] = await sqlBatch('DB_MAIN', [
+      {
+        sql: 'SELECT account_id,version,substr(verifier,23,64)<>? AS fresh_salt FROM jm_admin_credentials',
+        params: [savedVerifier.split(':')[2]],
+      },
+    ]);
+    assert.equal(credentials.results.length, 1);
+    assert.equal(credentials.results[0].account_id, adminId);
+    assert.equal(credentials.results[0].version, 2);
+    assert.equal(credentials.results[0].fresh_salt, 1);
+    await request('POST', '/_local/reconcile', null, {});
+    const [audit] = await sqlBatch('DB_OPERATIONS', [
+      {
+        sql: "SELECT action FROM jm_audit WHERE entity_id=? AND action LIKE 'admin.password_%' ORDER BY action",
+        params: [adminId],
+      },
+    ]);
+    assert.deepEqual(
+      audit.results.map((entry) => entry.action),
+      ['admin.password_changed', 'admin.password_initialized'],
+    );
+    await sqlBatch('DB_MAIN', [
+      {
+        sql: "UPDATE jm_rate SET count=30,window=CAST(unixepoch()/600 AS INTEGER) WHERE bucket='admin-login:account'",
+        params: [],
+      },
+    ]);
+    await adminLogin(successes[0].candidate, { status: 429, ip: '192.0.2.99' });
+    assert.equal((await request('GET', '/me', as(viewer))).role, 'customer');
+  });
+
+  await t.test('nonempty passwords work across independent Admin sessions', async () => {
+    assert(passwordAfterRotation);
+    await sqlBatch('DB_MAIN', [
+      {
+        sql: "DELETE FROM jm_rate WHERE bucket LIKE 'admin-login:%' OR bucket LIKE 'admin-password-change:%'",
+        params: [],
+      },
+    ]);
+    const strong = await adminLogin(passwordAfterRotation);
+    const changePath = '/admin/auth/password';
+    const localPassword = randomBytes(1).toString('hex');
+    await request('POST', changePath, as(strong), setCredential(passwordAfterRotation, localPassword), {
+      fixtures: false,
+    });
+    const sameIp = '192.0.2.42';
+    const [first, second] = await Promise.all([
+      adminLogin(localPassword, { fixtures: false, ip: sameIp }),
+      adminLogin(localPassword, { fixtures: false, ip: sameIp }),
+    ]);
+    assert.equal(first.account.id, second.account.id);
+    assert(first.accessToken !== second.accessToken);
+    await Promise.all([
+      request('GET', '/admin/dashboard', as(first), undefined, { ip: sameIp }),
+      request('GET', '/admin/dashboard', as(second), undefined, { ip: '192.0.2.43' }),
+    ]);
+    await request('POST', '/auth/logout', as(first), {});
+    await request('GET', '/admin/dashboard', as(first), undefined, { status: 401 });
+    await request('GET', '/admin/dashboard', as(second));
+    const singleSpace = ' ';
+    await request('POST', changePath, as(second), setCredential(localPassword, singleSpace));
+    await request('GET', '/admin/dashboard', as(second), undefined, { status: 401 });
+    await request('POST', '/auth/refresh', null, { refreshToken: second.refreshToken }, { status: 401 });
+    await adminLogin(localPassword, { fixtures: true, status: 401, ip: sameIp });
+    const production = await adminLogin(singleSpace, { ip: '192.0.2.44' });
+    assert.equal(production.account.id, adminId);
+    const anotherLowercase = Array.from(randomBytes(15), (byte) =>
+      String.fromCharCode(97 + (byte % 26)),
+    ).join('');
+    await request('POST', changePath, as(production), setCredential(singleSpace, anotherLowercase), {
+      fixtures: false,
+    });
+    assert.equal((await adminLogin(anotherLowercase, { ip: '192.0.2.45' })).account.id, adminId);
   });
 });

@@ -27,3 +27,7 @@ __pycache__/
 *.iml
 .cxx/
 .local/
+
+/dist/
+*.dpapi
+origin-credentials.dat

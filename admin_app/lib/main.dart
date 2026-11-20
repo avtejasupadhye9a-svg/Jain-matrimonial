@@ -1,10 +1,23 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kDebugMode;
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:jain_client/jain_client.dart';
 
 import 'review.dart';
+import 'admin_password.dart';
 
-void main() => runApp(AdminApp(api: Api()));
+void main() {
+  final api = Api(
+    base: kDebugMode ? apiBase : productionApiBase,
+    persistSession: false,
+  );
+  if (api.localDebug) {
+    api.fixtureKey = Platform.environment['JAIN_ADMIN_LOCAL_FIXTURE_KEY'] ?? '';
+  }
+  runApp(AdminApp(api: api));
+}
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key, required this.api});
@@ -17,7 +30,12 @@ class AdminApp extends StatelessWidget {
     home: SessionGate(
       api: api,
       role: 'admin',
-      home: (_) => AdminHome(api: api),
+      signIn: (_) => AdminLogin(api: api),
+      home: (_) => Navigator(
+        key: ValueKey(api.account!.id),
+        onGenerateRoute: (_) =>
+            MaterialPageRoute<void>(builder: (_) => AdminHome(api: api)),
+      ),
     ),
   );
 }
@@ -35,6 +53,7 @@ const groups = <String, (String, IconData)>{
   'notifications': ('Notifications', Icons.notifications_outlined),
   'audit': ('Audit log', Icons.history),
   'readiness': ('Storage and readiness', Icons.storage_outlined),
+  'settings': ('Settings', Icons.settings_outlined),
 };
 
 class AdminHome extends StatefulWidget {
@@ -111,6 +130,7 @@ class _AdminHomeState extends State<AdminHome> {
                           choose: (queue) => setState(() => selected = queue),
                         ),
                         'readiness' => Readiness(api: widget.api),
+                        'settings' => AdminPasswordSettings(api: widget.api),
                         _ => AdminQueue(
                           key: ValueKey(selected),
                           api: widget.api,
@@ -173,6 +193,14 @@ class Dashboard extends StatelessWidget {
         Align(
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(
+            onPressed: () => choose('settings'),
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('Settings'),
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
             onPressed: refresh,
             icon: const Icon(Icons.refresh),
             label: const Text('Refresh counts'),
@@ -203,11 +231,16 @@ class Readiness extends StatelessWidget {
                 : 'Email credentials unavailable',
           ),
         ),
-        const ListTile(
-          leading: Icon(Icons.no_photography_outlined),
-          title: Text('File transfer unavailable'),
-          subtitle: Text(
-            'Temporary storage and an authenticated origin route require configuration.',
+        ListTile(
+          leading: const Icon(Icons.storage_outlined),
+          title: Text(switch (data['uploads']) {
+            'online' => 'Permanent storage online',
+            'offline' => 'Permanent storage unreachable',
+            'unconfigured' => 'Permanent storage connection unconfigured',
+            _ => 'File transfer disabled',
+          }),
+          subtitle: const Text(
+            'Transfers require the permanent PC to be online.',
           ),
         ),
         const ListTile(

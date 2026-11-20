@@ -10,6 +10,7 @@ The Worker targets the existing jain-matrimonial-main (DB_MAIN) and jain-matrimo
 | DB_MAIN | 0002_profiles.sql | Profiles, ownership, drafts, revisions, claims, publication, moderation triggers |
 | DB_MAIN | 0003_matching.sql | Favorites, saved searches, interests and events, consent, privacy, blockers, file metadata |
 | DB_MAIN | 0004_moderation.sql | Moderation reasons, audit trigger and privacy request closure |
+| DB_MAIN | 0005_admin_password.sql | Singleton Admin verifier, session credential versions and password change audit and revocation triggers |
 | DB_OPERATIONS | 0001_operations.sql | Notifications, audit, email delivery jobs, storage jobs |
 
 ## Schema relationship overview
@@ -52,3 +53,10 @@ erDiagram
 SQLite comparisons and JSON predicates are parameterized. Age is calculated from DOB against the UTC calendar, including an explicit March 1 birthday boundary in non-leap years for February 29 births. Discovery uses encrypted keyset cursors with deterministic ID tie-breaks and a publication cutoff. Changes to visibility or moderation still apply immediately. Other lists use offset pagination and can shift when records change between requests.
 
 Apply locally from worker with npm.cmd run migrate:local. Before production, verify both live schemas through read-only sqlite_schema queries, inspect migration history and row counts, take approved backups, review table compatibility and reconcile any existing customer records. Cross-database effects use outbox replay instead of a joint transaction.
+
+
+## Additive Admin and storage migrations
+
+DB_MAIN 0005 adds the sole Admin password verifier and versioned Admin sessions. DB_MAIN 0006 adds the transfer queue and immutable synchronization receipts. DB_MAIN 0007 adds the singleton primary origin, enrollment commitments, generation and lease, replay checks, retry details and backup manifest digests. Permanent files and B2 object bodies stay outside D1. The operations database continues to receive audited events through the existing outbox.
+
+Before production review every pending migration together, compare the live schema with the candidate, confirm a recovery point and obtain owner approval. Local Worker tests apply these migrations in order against isolated data.

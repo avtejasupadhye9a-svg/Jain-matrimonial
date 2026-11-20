@@ -2,6 +2,8 @@
 
 A Windows-developed monorepo for an admin-controlled matrimonial service.
 
+For the Windows Admin application and the designated storage PC, use the [GUI installation and migration guide](docs/STORAGE.md). The unified x64 release candidate and its checksum are built under E:\J1\dist. See the [verified release status](docs/PROGRESS.md) before production activation.
+
 - customer_app contains the Flutter Android customer application.
 - admin_app contains the Flutter Windows administrator application.
 - client_shared contains the session client, common response types, forms and UI components.
@@ -12,5 +14,7 @@ A Windows-developed monorepo for an admin-controlled matrimonial service.
 Start with [Windows setup](docs/SETUP.md). See [feature status](docs/FEATURES.md), [API](docs/API.md), [database](docs/DATABASE.md), [workflows](docs/WORKFLOWS.md), [security](docs/SECURITY.md), [architecture](docs/ARCHITECTURE.md), [storage](docs/STORAGE.md), and the [deployment gate](docs/DEPLOYMENT.md).
 
 The production API base is https://jain-matrimonial-api.avtejasupadhye-9a.workers.dev. Local development uses isolated databases and synthetic fixture identities. Temporary file staging, live file transfer, SMS and Android push require separate provider configuration.
+
+The Windows Admin app opens with a single password field. The owner provisions the sole administrator through the private D1 setup script. Use Dashboard → Settings → Change Password to rotate it and end all Admin sessions. Android customer sign-in uses email OTP. See [Windows setup](docs/SETUP.md) and [production cutover](docs/DEPLOYMENT.md).
 
 See [native build and QA artifacts](docs/NATIVE_BUILDS.md) and the [continuation progress report](docs/PROGRESS.md).

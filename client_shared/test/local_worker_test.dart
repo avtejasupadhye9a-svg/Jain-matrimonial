@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -7,6 +6,7 @@ import 'package:jain_client/jain_client.dart';
 
 void main() {
   final key = Platform.environment['JAIN_TEST_FIXTURE_KEY'];
+  final adminPassword = Platform.environment['JAIN_TEST_ADMIN_PASSWORD'];
   final base =
       Platform.environment['JAIN_TEST_API_URL'] ?? 'http://127.0.0.1:8787';
 
@@ -15,26 +15,13 @@ void main() {
     () async {
       final emailSuffix = DateTime.now().microsecondsSinceEpoch;
       final customerEmail = 'customer-$emailSuffix@example.test';
-      final adminEmail = 'admin-$emailSuffix@example.test';
       const storage = FlutterSecureStorage();
       FlutterSecureStorage.setMockInitialValues({});
       final customer = Api(base: base, storage: storage)..fixtureKey = key!;
-      final admin = Api(base: base, storage: storage)..fixtureKey = key;
+      final admin = Api(base: base, persistSession: false)..fixtureKey = key;
       addTearDown(customer.dispose);
       addTearDown(admin.dispose);
       expect(customer.localDebug, isTrue);
-
-      final bootstrap = HttpClient();
-      addTearDown(() => bootstrap.close(force: true));
-      final request = await bootstrap.postUrl(
-        Uri.parse(base).resolve('/_local/admin'),
-      );
-      request.headers.contentType = ContentType.json;
-      request.headers.set('X-Local-Fixture-Key', key);
-      request.write(jsonEncode({'email': adminEmail}));
-      final response = await request.close();
-      expect(response.statusCode, 201);
-      await response.drain<void>();
 
       Future<void> signIn(Api api, String email, String role) async {
         final otp = await api.requestCode(email);
@@ -47,7 +34,7 @@ void main() {
       }
 
       await signIn(customer, customerEmail, 'customer');
-      await signIn(admin, adminEmail, 'admin');
+      await admin.signInAdmin(adminPassword!);
       final draft = await customer.post('/profiles', {
         'consent': true,
         'data': {
@@ -72,8 +59,8 @@ void main() {
       await customer.logout();
       await admin.logout();
     },
-    skip: key == null
-        ? 'Start an isolated fixture Worker and set JAIN_TEST_FIXTURE_KEY.'
+    skip: key == null || adminPassword == null
+        ? 'Provision an isolated local Admin and set the local test password and fixture key.'
         : false,
   );
 }

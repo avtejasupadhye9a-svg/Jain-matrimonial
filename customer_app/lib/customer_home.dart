@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:jain_client/jain_client.dart';
 
 import 'discovery.dart';
+import 'upload.dart';
 
 class CustomerHome extends StatefulWidget {
   const CustomerHome({super.key, required this.api});
@@ -254,10 +255,7 @@ class OwnProfile extends StatelessWidget {
                 refresh();
               }),
             ),
-            const ListTile(
-              leading: Icon(Icons.photo_outlined),
-              title: Text('Photo uploads are unavailable.'),
-            ),
+            PrivateUpload(api:api,profileId:id),
             const Divider(),
             Text(
               'Review history',

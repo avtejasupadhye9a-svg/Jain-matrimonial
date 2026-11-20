@@ -2,6 +2,7 @@ export interface Env {
   DB_MAIN: D1Database;
   DB_OPERATIONS: D1Database;
   AUTH_SECRET?: string;
+  ADMIN_PASSWORD_PEPPER?: string;
   BREVO_API_KEY?: string;
   BREVO_SENDER_EMAIL?: string;
   BREVO_SENDER_NAME?: string;
@@ -11,6 +12,21 @@ export interface Env {
   JAIN_LOCAL_TEST?: string;
   LOCAL_FIXTURE_KEY?: string;
   FILE_TRANSFER_ENABLED?: string;
+  STORAGE_ORIGIN_TOKEN?: string;
+  STORAGE_ORIGIN_ID?: string;
+  MANAGED_STORAGE_ENABLED?: string;
+  ORIGIN_SIGNED?: boolean;
+  ORIGIN_LEASE?: string;
+  STORAGE_CONNECTOR_TOKEN?: string;
+  B2_STAGING_BUDGET_BYTES?: string;
+  B2_STAGING_ENABLED?: string;
+  B2_KEY_ID?: string;
+  B2_APPLICATION_KEY?: string;
+  B2_BUCKET?: string;
+  B2_REGION?: string;
+  B2_ENDPOINT?: string;
+  STORAGE_ORIGIN?: { fetch(request: Request): Promise<Response> };
+  STORAGE_LOCAL_URL?: string;
   PUSH_ENABLED?: string;
 }
 
@@ -168,6 +184,8 @@ const hex = (data: ArrayBuffer | Uint8Array) =>
   [...new Uint8Array(data)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 export const randomToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 export const digest = async (text: string) => hex(await crypto.subtle.digest('SHA-256', utf8.encode(text)));
+export const digestBytes = async (data: Uint8Array<ArrayBuffer>) =>
+  hex(await crypto.subtle.digest('SHA-256', data));
 export async function keyed(env: Env, text: string) {
   if (!env.AUTH_SECRET || env.AUTH_SECRET.length < 32)
     throw new Failure(503, 'auth_unavailable', 'Authentication is temporarily unavailable.');
