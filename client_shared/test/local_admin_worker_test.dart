@@ -11,7 +11,8 @@ void main() {
   test(
     'Admin client signs in and publishes a profile through local Worker and D1',
     () async {
-      final admin = Api(base: base, persistSession: false);
+      final admin = Api(base: base, persistSession: false)
+        ..fixtureKey = Platform.environment['JAIN_TEST_FIXTURE_KEY'] ?? '';
       addTearDown(admin.dispose);
       expect(admin.localDebug, isTrue);
       final suffix = DateTime.now().microsecondsSinceEpoch;

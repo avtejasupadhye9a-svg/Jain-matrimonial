@@ -168,7 +168,7 @@ class _ProfileDocumentsState extends State<ProfileDocuments> {
         children: [
           const Text('Identity documents · administrator access'),
           const Text(
-            'Transfers require the permanent storage PC to be online.',
+            'Downloads are available after permanent storage confirms the file.',
           ),
           const SizedBox(height: 12),
           Wrap(

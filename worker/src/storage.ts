@@ -15,7 +15,9 @@ import {
   statement,
 } from './core';
 
-const maxBytes = 8 * 1024 * 1024;
+import { active } from './infrastructure';
+import { bytes, transport } from './origin';
+import { b2Transport, stage, synchronize } from './b2';
 const checksumPattern = /^[a-f0-9]{64}$/;
 const signatures: Record<string, readonly number[]> = {
   'application/pdf': [37, 80, 68, 70, 45],
@@ -38,47 +40,13 @@ function unavailable(): never {
   throw new Failure(
     503,
     'storage_unavailable',
-    'Permanent storage is unavailable. No offline copy will be made.',
+    'Storage is unavailable. Retry the upload using the same document ID.',
   );
-}
-
-function transport(env: Env) {
-  if (
-    env.FILE_TRANSFER_ENABLED !== 'true' ||
-    !env.STORAGE_ORIGIN_TOKEN ||
-    env.STORAGE_ORIGIN_TOKEN.length < 32
-  )
-    return null;
-  const local =
-    env.JAIN_LOCAL_TEST === 'true' && /^http:\/\/127\.0\.0\.1:[0-9]+$/.test(env.STORAGE_LOCAL_URL ?? '');
-  if (!env.STORAGE_ORIGIN && !local) return null;
-  const base = local ? env.STORAGE_LOCAL_URL : 'http://jain-storage.internal';
-  return async (
-    path: string,
-    method = 'GET',
-    body?: Uint8Array<ArrayBuffer>,
-    mime?: string,
-    sha256?: string,
-  ) => {
-    const headers = new Headers({ authorization: `Bearer ${env.STORAGE_ORIGIN_TOKEN}` });
-    if (body) {
-      headers.set('content-type', mime!);
-      headers.set('x-content-sha256', sha256!);
-    }
-    const request = new Request(base + path, {
-      method,
-      headers,
-      body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(8000),
-    });
-    return local ? fetch(request) : env.STORAGE_ORIGIN!.fetch(request);
-  };
 }
 
 export async function storageStatus(env: Env) {
   if (env.FILE_TRANSFER_ENABLED !== 'true') return 'disabled';
-  const send = transport(env);
+  const send = transport(await active(env));
   if (!send) return 'unconfigured';
   try {
     const response = await send('/health');
@@ -87,34 +55,6 @@ export async function storageStatus(env: Env) {
   } catch {
     return 'offline';
   }
-}
-
-async function bytes(body: ReadableStream<Uint8Array> | null) {
-  if (!body) return new Uint8Array(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) break;
-      length += next.value.byteLength;
-      if (length > maxBytes) {
-        await reader.cancel();
-        throw new Failure(413, 'file_too_large', 'Files must be 8 MiB or smaller.');
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const data = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    data.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return data;
 }
 
 export async function documents(env: Env, profileId: string, url: URL) {
@@ -134,7 +74,7 @@ function record(env: Env, id: string) {
 }
 
 export async function upload(env: Env, actor: Actor, id: string, request: Request, url: URL) {
-  const send = transport(env) ?? unavailable();
+  const send = transport(await active(env));
   const profileId = identifier(url.searchParams.get('profileId'), 'profileId');
   const mime = request.headers.get('content-type') ?? '';
   const sha256 = request.headers.get('x-content-sha256') ?? '';
@@ -148,30 +88,74 @@ export async function upload(env: Env, actor: Actor, id: string, request: Reques
   if ((await digestBytes(data)) !== sha256)
     throw new Failure(422, 'checksum_mismatch', 'The file checksum does not match.');
   const db = env.DB_MAIN;
-  if (!(await statement(db, 'SELECT id FROM jm_profiles WHERE id=?', profileId).first())) return missing();
+  const managed = env.MANAGED_STORAGE_ENABLED === 'true';
+  const customer = actor.role === 'customer';
+  const photo = customer && url.searchParams.get('kind') === 'photo';
+  if (customer && (!managed || !['photo', 'document'].includes(url.searchParams.get('kind') ?? '')))
+    return unavailable();
+  if (photo && !mime.startsWith('image/')) throw new Failure(415, 'file_type', 'Select a JPEG or PNG photo.');
+  if (env.FILE_TRANSFER_ENABLED !== 'true' || (!managed && !send)) return unavailable();
+  const access = photo ? 'owner' : 'admin',
+    category = photo ? 'photo' : 'identity_document';
+  const profile = customer
+    ? statement(
+        db,
+        "SELECT p.id FROM jm_profiles p JOIN jm_ownership o ON o.profile_id=p.id WHERE p.id=? AND p.suspended=0 AND o.account_id=? AND o.authority='owner'",
+        profileId,
+        actor.id,
+      )
+    : statement(db, 'SELECT id FROM jm_profiles WHERE id=?', profileId);
+  if (!(await profile.first())) return missing();
   await change(
     db,
     `INSERT OR IGNORE INTO jm_file_metadata(id,profile_id,category,sha256,mime,state,access_policy,created_at)
-    VALUES(?,?,'identity_document',?,?,'copying','admin',?)`,
+    VALUES(?,?,?,?,?,'copying',?,?)`,
     id,
     profileId,
+    category,
     sha256,
     mime,
+    access,
     now(),
   );
-  const saved = await record(env, id);
+  const lookup = () =>
+    statement(
+      db,
+      'SELECT id, profile_id AS profileId,sha256,mime,state,confirmed_at AS confirmedAt,created_at AS createdAt FROM jm_file_metadata WHERE id=? AND category=? AND access_policy=? AND deleted_at IS NULL',
+      id,
+      category,
+      access,
+    ).first<FileRecord>();
+  const saved = await lookup();
   if (
     !saved ||
     saved.sha256 !== sha256 ||
     saved.mime !== mime ||
     saved.profileId !== profileId ||
-    !['copying', 'failed', 'confirmed'].includes(saved.state)
+    !['copying', 'failed', 'staged', 'confirmed'].includes(saved.state)
   )
     return conflict();
-  if (saved.state === 'confirmed') return saved;
+  if (saved.state === 'confirmed' || saved.state === 'staged') return saved;
 
   try {
-    const response = await send('/objects/' + id, 'PUT', data, mime, sha256);
+    if (managed) {
+      const staging = b2Transport(env);
+      if (!staging) return unavailable();
+      await stage(db, staging, actor.id, id, data, sha256, Number(env.B2_STAGING_BUDGET_BYTES ?? 0));
+      return await lookup();
+    }
+    if (!send) return unavailable();
+    const response = await send('/objects/' + id, 'PUT', data, mime, sha256).catch(
+      () => new Response(null, { status: 503 }),
+    );
+    if (response.status >= 500) {
+      const b2 = b2Transport(env);
+      if (b2) {
+        await response.body?.cancel();
+        await stage(db, b2, actor.id, id, data, sha256);
+        return await record(env, id);
+      }
+    }
     if (response.status === 422) {
       await response.body?.cancel();
       throw new Failure(422, 'origin_rejected', 'The permanent storage scanner rejected the file.');
@@ -212,12 +196,20 @@ export async function upload(env: Env, actor: Actor, id: string, request: Reques
 }
 
 export async function download(env: Env, actor: Actor, id: string) {
-  const send = transport(env) ?? unavailable();
-  const saved = await record(env, id);
+  const send = transport(await active(env)) ?? unavailable();
+  const customer = actor.role === 'customer';
+  const saved = customer
+    ? await statement(
+        env.DB_MAIN,
+        "SELECT f.id,f.mime,f.sha256,f.state FROM jm_file_metadata f JOIN jm_ownership o ON o.profile_id=f.profile_id JOIN jm_profiles p ON p.id=f.profile_id WHERE f.id=? AND o.account_id=? AND o.authority='owner' AND p.suspended=0 AND f.category='photo' AND f.access_policy='owner' AND f.deleted_at IS NULL",
+        id,
+        actor.id,
+      ).first<FileRecord>()
+    : await record(env, id);
   if (!saved || saved.state !== 'confirmed') return missing();
   let data: Uint8Array<ArrayBuffer>;
   try {
-    const response = await send('/objects/' + id + '/content');
+    const response = await send((customer ? '/photos/' : '/objects/') + id + '/content');
     if (response.status !== 200) {
       await response.body?.cancel();
       return unavailable();
@@ -230,4 +222,44 @@ export async function download(env: Env, actor: Actor, id: string) {
   }
   await audit(env.DB_MAIN, actor, id, 'storage.downloaded').run();
   return { data, mime: saved.mime, sha256: saved.sha256 };
+}
+
+export async function syncPending(env: Env) {
+  const b2 = b2Transport(env);
+  if (!b2 || env.FILE_TRANSFER_ENABLED !== 'true') return;
+  const managed = env.MANAGED_STORAGE_ENABLED === 'true',
+    lease = crypto.randomUUID();
+  if (
+    managed &&
+    !(await change(
+      env.DB_MAIN,
+      'UPDATE jm_origin_control SET lease=?,lease_until=unixepoch()+900 WHERE slot=1 AND paused=0 AND primary_id IS NOT NULL AND lease_until<=unixepoch()',
+      lease,
+    ))
+  )
+    return;
+  try {
+    const selected = await active(env),
+      send = transport(selected);
+    if (!send) return;
+    const r = await send('/health').catch(() => null);
+    await r?.body?.cancel();
+    if (r?.ok) await synchronize({ ...selected, ORIGIN_LEASE: lease }, send, b2);
+  } finally {
+    if (managed)
+      await change(env.DB_MAIN, 'UPDATE jm_origin_control SET lease=NULL,lease_until=0 WHERE lease=?', lease);
+  }
+}
+
+export async function ownFiles(env: Env, actor: Actor, profile: string, url: URL) {
+  const { limit, offset } = page(url);
+  const items = await rows(
+    env.DB_MAIN,
+    "SELECT f.id,f.category,f.state,f.sha256,f.mime FROM jm_file_metadata f JOIN jm_ownership o ON o.profile_id=f.profile_id JOIN jm_profiles p ON p.id=f.profile_id WHERE f.profile_id=? AND o.account_id=? AND o.authority='owner' AND p.suspended=0 AND f.deleted_at IS NULL ORDER BY f.created_at DESC,f.id LIMIT ? OFFSET ?",
+    profile,
+    actor.id,
+    limit + 1,
+    offset,
+  );
+  return listing(items, limit, offset);
 }

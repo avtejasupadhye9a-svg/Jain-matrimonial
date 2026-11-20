@@ -4,10 +4,16 @@ account_id = "b41fb39745bd9230d4333b6f905675c4"
 compatibility_date = "2026-11-18"
 
 [vars]
+B2_BUCKET = "jain-matrimonial-temp-9a"
+B2_REGION = "us-east-005"
+B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com"
+BREVO_SENDER_EMAIL = "avtejasupadhye.9a@gmail.com"
 BREVO_SENDER_NAME = "Jain Matrimonial"
 ACTIVE_PROFILE_LIMIT = "1"
 DISCOVERY_DETAILS = "true"
 FILE_TRANSFER_ENABLED = "false"
+MANAGED_STORAGE_ENABLED = "false"
+B2_STAGING_ENABLED = "false"
 PUSH_ENABLED = "false"
 
 [[d1_databases]]
@@ -26,3 +32,7 @@ migrations_table = "jm_migrations"
 
 [triggers]
 crons = ["*/5 * * * *"]
+
+[[vpc_services]]
+binding = "STORAGE_ORIGIN"
+service_id = "01a1f73c-fcc5-7432-99dc-b88112da7257"

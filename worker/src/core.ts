@@ -13,6 +13,18 @@ export interface Env {
   LOCAL_FIXTURE_KEY?: string;
   FILE_TRANSFER_ENABLED?: string;
   STORAGE_ORIGIN_TOKEN?: string;
+  STORAGE_ORIGIN_ID?: string;
+  MANAGED_STORAGE_ENABLED?: string;
+  ORIGIN_SIGNED?: boolean;
+  ORIGIN_LEASE?: string;
+  STORAGE_CONNECTOR_TOKEN?: string;
+  B2_STAGING_BUDGET_BYTES?: string;
+  B2_STAGING_ENABLED?: string;
+  B2_KEY_ID?: string;
+  B2_APPLICATION_KEY?: string;
+  B2_BUCKET?: string;
+  B2_REGION?: string;
+  B2_ENDPOINT?: string;
   STORAGE_ORIGIN?: { fetch(request: Request): Promise<Response> };
   STORAGE_LOCAL_URL?: string;
   PUSH_ENABLED?: string;

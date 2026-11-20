@@ -22,6 +22,7 @@ import * as matching from './matching';
 import * as ops from './operations';
 import * as moderation from './moderation';
 import * as storage from './storage';
+import * as infra from './infrastructure';
 
 interface Context extends auth.AuthContext {
   url: URL;
@@ -53,6 +54,36 @@ function route(
 const providerActor = (c: Context) => c.actor!;
 const id = (c: Context) => c.id!;
 
+route('GET', '/admin/infrastructure', 'admin', (c) => infra.status(c.env));
+route('POST', '/admin/infrastructure/enroll', 'admin', (c) => infra.enroll(c.env, providerActor(c), c.input));
+route('POST', '/admin/infrastructure/activate', 'admin', (c) =>
+  infra.promote(c.env, providerActor(c), c.input),
+);
+route('POST', '/admin/infrastructure/control', 'admin', (c) =>
+  infra.transition(c.env, providerActor(c), c.input),
+);
+route('POST', '/storage/origin/backup', 'public', (c) => infra.backupApi(c.env, c.input));
+route('POST', '/storage/enrollment/claim', 'public', async (c) => {
+  await rate(
+    c.env.DB_MAIN,
+    'origin-claim:' + (c.request.headers.get('cf-connecting-ip') ?? 'unknown'),
+    20,
+    300,
+  );
+  return infra.claim(c.env, c.input);
+});
+route('GET', '/customer/profiles/:id/files', 'customer', (c) =>
+  storage.ownFiles(c.env, providerActor(c), id(c), c.url),
+);
+route('GET', '/customer/files/:id', 'customer', async (c) => {
+  const f = await storage.download(c.env, providerActor(c), id(c));
+  return new Response(f.data, {
+    headers: { 'content-type': f.mime, 'content-disposition': 'attachment', 'x-content-sha256': f.sha256 },
+  });
+});
+route('PUT', '/customer/files/:id', 'customer', (c) =>
+  storage.upload(c.env, providerActor(c), id(c), c.request, c.url),
+);
 route('GET', '/health', 'public', () => ({ status: 'ok' }));
 route('GET', '/readiness', 'admin', async (c) => {
   await Promise.all([
@@ -69,9 +100,7 @@ route('GET', '/readiness', 'admin', async (c) => {
 route('POST', '/auth/otp/request', 'public', (c) => auth.loginRequest(c, c.input), 202);
 route('POST', '/auth/otp/verify', 'public', (c) => auth.loginVerify(c, c.input));
 route('POST', '/admin/auth/login', 'public', (c) => adminAuth.login(c, c.input));
-route('POST', '/admin/auth/password', 'admin', (c) =>
-  adminAuth.changePassword(c.env, providerActor(c), c.input),
-);
+route('POST', '/admin/auth/password', 'admin', (c) => adminAuth.changePassword(c.env, providerActor(c), c.input));
 route('POST', '/auth/refresh', 'public', (c) => auth.refresh(c.env, c.input));
 route('POST', '/auth/logout', 'signed_in', (c) => auth.logout(c.env, providerActor(c)));
 route('POST', '/auth/claim-code', 'customer', (c) => auth.claimCode(c, providerActor(c)), 202);
@@ -409,7 +438,10 @@ async function fetchApi(request: Request, env: Env, ctx: ExecutionContext) {
         if (request.method !== 'GET') await rate(env.DB_MAIN, 'write:' + c.actor.id, 120, 300);
       }
       c.id = hit.id && !selected.path.includes(':notification') ? identifier(hit.id) : hit.id;
-      if (['POST', 'PUT'].includes(request.method) && selected.path !== '/admin/documents/:id')
+      if (
+        ['POST', 'PUT'].includes(request.method) &&
+        !['/admin/documents/:id', '/customer/files/:id'].includes(selected.path)
+      )
         c.input = await body(request);
       const result = await execute(c, selected);
       if (c.actor && (request.method !== 'GET' || result instanceof Response))
@@ -437,6 +469,7 @@ async function fetchApi(request: Request, env: Env, ctx: ExecutionContext) {
 export default {
   fetch: fetchApi,
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(storage.syncPending(env));
     ctx.waitUntil(
       (async () => {
         await matching.expireInterests(env);

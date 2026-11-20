@@ -1,6 +1,30 @@
 # Continuation progress
 
-## Admin password-only login
+## Windows release candidate 1.2.0, 2026-11-20
+
+The unsigned x64 installer is E:\J1\dist\JainMatrimonialAdmin-Setup.exe, 37,908,992 bytes. SHA-256 is f4ac08c0aab2899ec962f672d6a53d015e2910e3d1ac1f9e0f4b9a21311af91b. Follow STORAGE.md for GUI installation, backup and migration.
+
+| Area | Verification |
+| --- | --- |
+| Worker | 12 tests passed including local D1 acceptance, single Admin and customer access, enrollment expiry/replay, primary fencing, signed backup export and manifest registration, inventory-verified migration between two local Python origins, offline retry and receipt-gated version cleanup. TypeScript, formatting and Wrangler dry-run bundling passed. Tests substituted the B2 API and Cloudflare network. |
+| Windows storage | Nine Python tests passed including DPAPI designation, service startup/shutdown logic, backup integrity, conflicting restore, ownership, NTFS ACL and hard-link rejection, access controls and retry. The frozen service passed a separate Windows DPAPI and loopback HTTP self-test. |
+| Flutter | Admin and customer static analysis passed. Five Admin and three customer widget tests passed. Two client integration tests and the environment-gated Admin UI test ran against local Worker/D1 fixtures. Changing the password invalidated the second Admin session. |
+| Installer | Verified the release hash, embedded MSI, all 1,034 extracted payload files, embedded SCM helper, shortcuts, SCM actions and drive/space preflight. The packaged Flutter executable opened a responsive Windows window. |
+| Release blockers | Windows canceled elevation for the disposable SCM test. Clean machine-wide install, repair, upgrade, uninstall, Defender under the service account, reboot, crash recovery and a two-PC transfer still need acceptance. The current Worker lacks the private VPC binding and has pending migrations. No production enrollment, B2 upload, cleanup or recovery was performed. |
+
+### Source inventory
+
+- The Windows Admin changes are in admin_app/lib/storage_infrastructure.dart and admin_password.dart. scripts/windows contains the launcher, installer, packaging and acceptance scripts. scripts/storage/Build.ps1 freezes the service.
+- local_storage_service/managed.py, windows_host.py and service.py implement machine enrollment, DPAPI, SCM, scanning, backup and restore. The disposable SCM workflow is .github/workflows/storage-server.yml.
+- worker/src/index.ts, core.ts, infrastructure.ts, origin.ts, storage.ts and b2.ts implement routing, private transport, staging and cleanup. The additive main migrations 0005, 0006 and 0007 cover Admin passwords, transfer receipts and storage origin management. Feature gates and bindings are in worker/wrangler.toml.
+- Worker integration coverage is in worker/test/enrollment.test.mjs and storage-sync.test.mjs. Windows regression coverage includes local_storage_service/test_managed_backup.py and test_windows_host.py. Customer upload and private photo retrieval use customer_app/lib/upload.dart and customer_home.dart.
+- STORAGE.md covers GUI operation, DEPLOYMENT.md covers production approvals, API.md lists the routes and NATIVE_BUILDS.md records the build inputs.
+
+## Historical verification
+
+### Admin password-only login
+
+- Verified the local two-character bootstrap and the production 15-character minimum. The loopback UI test kept two clients signed in to the same account, changed the password in Settings, and confirmed the other client lost access. Worker tests also verified separate sessions from the same IP, from different IPs, and customer OTP.
 
 - Added a single Windows Admin password field and Dashboard → Settings → Change Password. Customer email OTP remains in place.
 - Added a singleton verifier and versioned Admin sessions through an additive DB_MAIN migration. The private operator script provisioned an isolated local Admin account and refused a second setup.

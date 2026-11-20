@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kDebugMode;
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:jain_client/jain_client.dart';
@@ -5,7 +8,16 @@ import 'package:jain_client/jain_client.dart';
 import 'review.dart';
 import 'admin_password.dart';
 
-void main() => runApp(AdminApp(api: Api(persistSession: false)));
+void main() {
+  final api = Api(
+    base: kDebugMode ? apiBase : productionApiBase,
+    persistSession: false,
+  );
+  if (api.localDebug) {
+    api.fixtureKey = Platform.environment['JAIN_ADMIN_LOCAL_FIXTURE_KEY'] ?? '';
+  }
+  runApp(AdminApp(api: api));
+}
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key, required this.api});

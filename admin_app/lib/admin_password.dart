@@ -1,3 +1,4 @@
+import 'storage_infrastructure.dart';
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
@@ -135,67 +136,80 @@ class _AdminPasswordSettingsState extends State<AdminPasswordSettings> {
   }
 
   @override
-  Widget build(BuildContext context) => ListView(
-    children: [
-      Align(
-        alignment: Alignment.topLeft,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 460),
-          child: Form(
-            key: form,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Change Password',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                const Text('Saving signs you out of all Admin sessions.'),
-                const SizedBox(height: 20),
-                _PasswordField(
-                  label: 'Current password',
-                  controller: current,
-                  enabled: !busy,
-                  validator: _required,
-                ),
-                const SizedBox(height: 12),
-                _PasswordField(
-                  label: 'New password',
-                  controller: next,
-                  enabled: !busy,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Enter the password.';
-                    }
-                    if (value == current.text) {
-                      return 'Choose a different password.';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                _PasswordField(
-                  label: 'Confirm new password',
-                  controller: confirmation,
-                  enabled: !busy,
-                  validator: (value) => value == next.text
-                      ? null
-                      : 'The new passwords do not match.',
-                ),
-                if (error != null) _FormError(error!),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: busy ? null : save,
-                  child: Text(busy ? 'Saving…' : 'Change Password'),
-                ),
-              ],
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.storage),
+          title: const Text('Storage Infrastructure'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => StorageInfrastructure(api: widget.api),
             ),
           ),
         ),
-      ),
-    ],
-  );
+        Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Form(
+              key: form,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Change Password',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Saving signs you out of all Admin sessions.'),
+                  const SizedBox(height: 20),
+                  _PasswordField(
+                    label: 'Current password',
+                    controller: current,
+                    enabled: !busy,
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 12),
+                  _PasswordField(
+                    label: 'New password',
+                    controller: next,
+                    enabled: !busy,
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Enter the password.';
+                      }
+                      if (value == current.text) {
+                        return 'Choose a different password.';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  _PasswordField(
+                    label: 'Confirm new password',
+                    controller: confirmation,
+                    enabled: !busy,
+                    validator: (value) => value == next.text
+                        ? null
+                        : 'The new passwords do not match.',
+                  ),
+                  if (error != null) _FormError(error!),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: busy ? null : save,
+                    child: Text(busy ? 'Saving…' : 'Change Password'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 String? _required(String? text) =>

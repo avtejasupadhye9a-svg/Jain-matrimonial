@@ -2,6 +2,8 @@
 
 A Windows-developed monorepo for an admin-controlled matrimonial service.
 
+For the Windows Admin application and the designated storage PC, use the [GUI installation and migration guide](docs/STORAGE.md). The unified x64 release candidate and its checksum are built under E:\J1\dist. See the [verified release status](docs/PROGRESS.md) before production activation.
+
 - customer_app contains the Flutter Android customer application.
 - admin_app contains the Flutter Windows administrator application.
 - client_shared contains the session client, common response types, forms and UI components.

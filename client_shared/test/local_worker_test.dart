@@ -18,7 +18,7 @@ void main() {
       const storage = FlutterSecureStorage();
       FlutterSecureStorage.setMockInitialValues({});
       final customer = Api(base: base, storage: storage)..fixtureKey = key!;
-      final admin = Api(base: base, persistSession: false);
+      final admin = Api(base: base, persistSession: false)..fixtureKey = key;
       addTearDown(customer.dispose);
       addTearDown(admin.dispose);
       expect(customer.localDebug, isTrue);

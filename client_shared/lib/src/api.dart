@@ -7,9 +7,11 @@ import 'package:flutter/foundation.dart' show ChangeNotifier, kDebugMode;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 typedef Json = Map<String, dynamic>;
+const productionApiBase =
+    'https://jain-matrimonial-api.avtejasupadhye-9a.workers.dev';
 const apiBase = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://jain-matrimonial-api.avtejasupadhye-9a.workers.dev',
+  defaultValue: productionApiBase,
 );
 
 Json asJson(Object? value) => Map<String, dynamic>.from(value as Map);

@@ -1,38 +1,40 @@
-# Private PC storage
+# Windows Admin and permanent storage
 
-The Admin app opens **Private documents** from a profile. The Worker checks the administrator’s session against DB_MAIN before it reads metadata or calls the origin. It accepts identity documents in PDF, PNG, or JPEG format up to 8 MiB. The Worker and the PC validate the file type and SHA-256. Downloads are checked against D1 again, served as private attachments, and saved through a native Windows dialog. The app checks the checksum before writing a new file.
+## Install an Admin PC
 
-DB_MAIN uses the existing `jm_file_metadata` table. A direct transfer reserves an opaque UUID in `copying` and sets it to `confirmed` only when the PC returns a matching object ID, checksum and length. A failed transfer can be retried by selecting the original bytes on the same document row. The PC preserves matching bytes across retries and rejects different bytes for the same UUID. D1 audit events record successful transfers and origin failures. The Admin readiness view shows disabled, unconfigured, offline, or online.
+1. Use Windows x64 with a ready, fixed NTFS **E:** drive and at least 700 MiB free for installation. Allow additional space for uploads and backups on the designated server. Keep the drive under administrator control. Enrollment checks existing permanent files for SYSTEM or Administrators ownership, private NTFS ACLs and unexpected links. An insecure existing directory must be reviewed before adoption. Setup checks the existing drive and stops if it is unsuitable.
+2. Obtain the unified **JainMatrimonialAdmin-Setup.exe** and **SHA256SUMS.txt** from the release owner. Compare the SHA-256 using a trusted checksum viewer before opening this unsigned build.
+3. Double-click the installer, confirm the Windows elevation prompt and select **OK** to install on E:. Open **Jain Matrimonial Admin** from Start or the desktop. Enter the shared Admin password. All installations use the same Worker. For routine Admin work, installation ends here.
+4. After the owner approves and completes the cloud rollout, on the selected **main PC** open **Dashboard → Settings → Storage Infrastructure → Enable Main Storage Server**. Confirm the action and approve the local Windows prompts. Leave Defender enabled. The elevated helper creates the enrollment material and configures the service. The app verifies the enrolled PC through the private Worker route.
+5. Refresh **Storage Infrastructure**. Check the designated PC, **Private Worker route**, local service, B2 connectivity and pending transfers. Closing the Admin app leaves the installed service running. Production activation remains pending for this release candidate.
 
-The PC must be reachable for every transfer. If the PC is offline, the request fails and its status remains visible. Temporary cloud storage, automatic offline staging, and automatic background transfer are unconfigured. The separate sync prototype remains for future staging-provider work.
+Program binaries, configuration, encrypted credentials, logs, state, installer cache and default backups live under E:\JainMatrimonialAdmin. The permanent store defaults to E:\JainMatrimonialStorage. The desktop and Start menu shortcuts, Windows Installer's system-managed cache, service registry and Windows event log use standard Windows locations. Ordinary Admin machines have the packaged service binaries. Only explicit enrollment starts the storage role.
 
-## Routing proposal for approval
+## Synchronization and privacy
 
-1. Verify ownership, management mode and connector health for the existing `jain-matrimonial-storage` Tunnel (`5ce2883f-933e-49c8-ab01-014841037d0e`). Check that the Windows PC runs its connector with QUIC or auto transport. Verify there are no conflicting connectors or public routes for the origin. [Cloudflare Tunnel for Workers VPC](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)
-2. Reuse a matching VPC Service if present. Otherwise, after approval, register an HTTP VPC Service named `jain-matrimonial-storage-origin` on that Tunnel with IPv4 `127.0.0.1` and HTTP port `8765`. Use HTTP only on this same-machine loopback hop. Add the resulting service ID as the Worker’s `STORAGE_ORIGIN` binding. The proposed route requires no DNS hostname or inbound PC firewall rule. VPC Services are currently in beta. [VPC service configuration and pricing](https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/)
-3. Prepare the Windows service with an existing absolute storage directory on encrypted permanent storage, ACLs for its service identity, and an absolute `MpCmdRun.exe` path. Set `JAIN_STORAGE_ROOT`, `JAIN_STORAGE_DEFENDER_PATH`, and `JAIN_STORAGE_TOKEN` via secured runtime configuration. Store the same random token as the Worker secret `STORAGE_ORIGIN_TOKEN`. Keep `JAIN_STORAGE_LOCAL_TEST` unset on the service and `JAIN_LOCAL_TEST` unset on the Worker. Verify clean files and a scanner failure under the actual service identity before approvals. [Microsoft Defender command-line options](https://learn.microsoft.com/en-us/defender-endpoint/command-line-arguments-microsoft-defender-antivirus)
-4. Review and approve enabling `FILE_TRANSFER_ENABLED=true` in a separate deployment after the API, PC, and private route are verified. Use synthetic documents for the first authorized inspection. Verify roles, an incorrect origin token, direct-access denial, clean/malformed documents, concurrent retries, disk errors, and unplugged-PC behavior before real documents. Disable the flag if transfer verification fails.
+Approved uploads enter the private B2 staging bucket when transfer and staging flags are enabled. The Worker retries eligible files on its five-minute schedule. The origin verifies file type, size and SHA-256, requires a successful malware scan, and commits files locally. The Worker journals durable receipts in D1. Cleanup requires the immutable cloud receipt, a fresh hash of the permanent bytes and the correct B2 version. An interrupted operation can be retried. A pending or quarantined file is unavailable for private reads. Access to an identity document requires Admin authorization. The cloud connector has no public file route.
 
-Proposed Wrangler binding after approval:
+The dashboard displays D1 transfer counts and recorded bytes, the application's staging budget if configured, and free space reported by the signed origin. The bucket probe checks connectivity. Account-wide provider quota, files outside the transfer ledger and disk space on an unreachable PC cannot be measured by these counters. The local tunnel service field refers to the Windows cloudflared service. The private route check also works with the bundled supervised connector.
 
-```toml
-[[vpc_services]]
-binding = "STORAGE_ORIGIN"
-service_id = "<existing-or-approved-service-id>"
-remote = true
-```
+## Backup, restore and migration
 
-A Cloudflare Access service-token policy on a Tunnel hostname is another supported option. It requires a DNS hostname, Service Auth policy, and scoped Access credentials. The current Worker implements the hostname-free VPC path. A broader VPC Network binding would permit access to more of the PC’s network and is unnecessary for this service. [Access service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
+1. On the active PC select **Begin transfer** to pause permanent transfers during a migration. Use **Create backup** for an on-disk snapshot, or **Back up to another drive** and select a protected external NTFS volume. Use encrypted external media for private documents. A same-drive snapshot cannot recover a failed disk.
+2. Wait for completion. The service copies files, verifies checksums, exports metadata and receipts, and registers a manifest digest with the Worker. An interrupted backup can reuse the pending copy. Preserve the completed Backup folder. Protect the existing D1 databases separately using the approved cloud backup procedure.
+3. On the replacement PC install the same Admin package and sign in. While the role is paused, select **Restore verified backup**, choose the recorded timestamp, then select its matching backup folder. Mismatched manifests, damaged content and conflicting destination files stop restoration. Enrollment material is provisioned separately on the new machine.
+4. Retire the old connector through the existing tunnel's approved operator procedure and make the private route reach the replacement PC. On the new PC select **Enable Main Storage Server**. Leave verification running until the Worker confirms the signed challenge and every confirmed file. An interrupted verification can continue using **Verify enrollment**. Refresh the dashboard and check the designated PC before returning the machine to service.
+5. If replacement verification fails before promotion, restore the old connector path and use **Resume previous origin** on the previous PC. If the previous PC and its backups are both unavailable, first recover the missing permanent files. B2 objects already cleaned up cannot reconstruct them.
 
-## Local testing
+Use **Begin transfer** before **Configure storage location** or **Rotate origin credential**. Location changes copy to a new folder under E:\JainMatrimonialStorage\Locations and verify the copy. Use **Disable main storage** only after checking the designated PC and understanding that this revokes its cloud authorization.
 
-From the repository root, run `python -m unittest local_storage_service.test_storage -v`. From `worker`, run `npm test`. The API test starts a real isolated Python loopback origin with a synthetic scanner and tests Worker authentication, D1, upload, checksum, download, process shutdown, and retry. The test uses synthetic data.
+## Repair, upgrade and uninstall
 
-For a manual isolated origin, open a terminal in the repository and run:
+- If the service is unavailable, use **View logs**, verify Defender readiness and free space, then **Repair storage service** or **Restart storage service**. A successful Worker route test confirms the path to the selected identity. **Retry failed transfers** reschedules failed items after the cause has been corrected.
+- If management is unavailable on all PCs, check the approved Worker version, migration level, feature flags and VPC binding. If sign-in fails after a password change, use the new password. Changing the shared password revokes Admin sessions on every PC.
+- Close the Admin app and rerun the trusted installer to repair. Use the replacement installer to upgrade. Before servicing the main PC, take a verified external backup, pause transfers and schedule an outage. Windows Installer handles binary replacement. Verify local service state, private connectivity and a test transfer afterward.
+- Use **Windows Settings → Apps → Installed apps → Jain Matrimonial Admin → Uninstall**. Migrate or revoke the role first. Permanent files, backups and protected state remain with the owner. Retire the machine using your data retention procedure.
 
-```powershell
-$env:JAIN_STORAGE_LOCAL_TEST = 'true'
-$env:JAIN_STORAGE_ROOT = Join-Path (Get-Location) 'local-data'
-$env:JAIN_STORAGE_TOKEN = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-python -m local_storage_service.service
-```
+## Security and release acceptance
+
+The owner initializes the sole production Admin privately. Client enrollment uses a five-minute, single-use ticket bound to the Admin session and a machine-generated secret. The service protects credentials with machine DPAPI and restrictive ACLs. It runs as LocalSystem for Defender access. Treat local administrators as trusted. The Worker authenticates origin requests and responses and serializes primary changes in D1. The replacement connector needs either its preconfigured Windows service or approved tunnel-specific provisioning at the Worker.
+
+The Windows package has passed local non-elevated checks described in PROGRESS.md. Production distribution requires a disposable E: Windows install, repair, upgrade, uninstall, boot and crash-recovery run, plus a two-PC migration rehearsal. Live B2 and VPC transfer acceptance requires separate owner approval. No production credential belongs in this package.
