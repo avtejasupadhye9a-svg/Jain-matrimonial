@@ -35,7 +35,10 @@ jobs:
           git clone --depth 1 --branch "$FLUTTER_REF" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = "$FLUTTER_COMMIT"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+          sdk="$ANDROID_HOME/cmdline-tools"
+          sdkmanager="$(find "$sdk" -type f -path '*/bin/sdkmanager' -print -quit)"
+          test -n "$sdkmanager"
+          "$sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
       - name: Analyze, test, and build APK
         working-directory: customer_app
         run: |
