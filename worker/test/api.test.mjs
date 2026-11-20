@@ -150,7 +150,8 @@ const otp = (email) => request('POST', '/auth/otp/request', null, { email }, { s
 const verify = (code) =>
   request('POST', '/auth/otp/verify', null, { challengeId: code.challengeId, code: code.localTestCode });
 const as = (account) => account.accessToken;
-const adminLogin = (password, options) => request('POST', '/admin/auth/login', null, { password }, options);
+const adminLogin = (password, options) =>
+  request('POST', '/admin/auth/login', null, { password }, { fixtures: false, ...options });
 const setCredential = (currentPassword, newPassword, confirmPassword = newPassword) => ({
   currentPassword,
   newPassword,
@@ -700,6 +701,7 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     },
   );
 
+  let passwordAfterRotation;
   await t.test('one password-only administrator, throttling and atomic session revocation', async () => {
     const dummy = await otp(legacyAdminEmail);
     assert.deepEqual(Object.keys(dummy), ['challengeId']);
@@ -725,6 +727,12 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     }
     await adminLogin(originalPassword, { status: 429, ip: rateIp });
     const alternate = await adminLogin(originalPassword, { ip: '192.0.2.26' });
+    assert.equal(alternate.account.id, admin.account.id);
+    assert(admin.accessToken !== alternate.accessToken);
+    await Promise.all([
+      request('GET', '/admin/dashboard', as(admin), undefined, { ip: '192.0.2.27' }),
+      request('GET', '/admin/dashboard', as(alternate), undefined, { ip: '192.0.2.26' }),
+    ]);
     const next = makePassword();
     await request('POST', '/admin/auth/password', as(admin), setCredential(makePassword(), next), {
       status: 403,
@@ -736,8 +744,9 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
       setCredential(originalPassword, next, makePassword()),
       { status: 400 },
     );
-    await request('POST', '/admin/auth/password', as(admin), setCredential(originalPassword, 'short'), {
+    await request('POST', '/admin/auth/password', as(admin), setCredential(originalPassword, ''), {
       status: 400,
+      fixtures: false,
     });
     await request(
       'POST',
@@ -759,6 +768,7 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     );
     const successes = competing.filter((result) => result.status === 200);
     assert.equal(successes.length, 1);
+    passwordAfterRotation = successes[0].candidate;
     assert([401, 409].includes(competing.find((result) => result.status !== 200).status));
     for (const revoked of [admin, alternate]) {
       await request('GET', '/admin/dashboard', as(revoked), undefined, { status: 401 });
@@ -800,5 +810,49 @@ test('local D1 acceptance scenarios across customer and administrator APIs', asy
     ]);
     await adminLogin(successes[0].candidate, { status: 429, ip: '192.0.2.99' });
     assert.equal((await request('GET', '/me', as(viewer))).role, 'customer');
+  });
+
+  await t.test('nonempty passwords work across independent Admin sessions', async () => {
+    assert(passwordAfterRotation);
+    await sqlBatch('DB_MAIN', [
+      {
+        sql: "DELETE FROM jm_rate WHERE bucket LIKE 'admin-login:%' OR bucket LIKE 'admin-password-change:%'",
+        params: [],
+      },
+    ]);
+    const strong = await adminLogin(passwordAfterRotation);
+    const changePath = '/admin/auth/password';
+    const localPassword = randomBytes(1).toString('hex');
+    await request('POST', changePath, as(strong), setCredential(passwordAfterRotation, localPassword), {
+      fixtures: false,
+    });
+    const sameIp = '192.0.2.42';
+    const [first, second] = await Promise.all([
+      adminLogin(localPassword, { fixtures: false, ip: sameIp }),
+      adminLogin(localPassword, { fixtures: false, ip: sameIp }),
+    ]);
+    assert.equal(first.account.id, second.account.id);
+    assert(first.accessToken !== second.accessToken);
+    await Promise.all([
+      request('GET', '/admin/dashboard', as(first), undefined, { ip: sameIp }),
+      request('GET', '/admin/dashboard', as(second), undefined, { ip: '192.0.2.43' }),
+    ]);
+    await request('POST', '/auth/logout', as(first), {});
+    await request('GET', '/admin/dashboard', as(first), undefined, { status: 401 });
+    await request('GET', '/admin/dashboard', as(second));
+    const singleSpace = ' ';
+    await request('POST', changePath, as(second), setCredential(localPassword, singleSpace));
+    await request('GET', '/admin/dashboard', as(second), undefined, { status: 401 });
+    await request('POST', '/auth/refresh', null, { refreshToken: second.refreshToken }, { status: 401 });
+    await adminLogin(localPassword, { fixtures: true, status: 401, ip: sameIp });
+    const production = await adminLogin(singleSpace, { ip: '192.0.2.44' });
+    assert.equal(production.account.id, adminId);
+    const anotherLowercase = Array.from(randomBytes(15), (byte) =>
+      String.fromCharCode(97 + (byte % 26)),
+    ).join('');
+    await request('POST', changePath, as(production), setCredential(singleSpace, anotherLowercase), {
+      fixtures: false,
+    });
+    assert.equal((await adminLogin(anotherLowercase, { ip: '192.0.2.45' })).account.id, adminId);
   });
 });

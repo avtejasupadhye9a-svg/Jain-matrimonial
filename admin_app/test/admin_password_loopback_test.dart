@@ -33,6 +33,7 @@ void main() {
   testWidgets(
     'real Admin UI changes the local password and revokes other sessions',
     (tester) async {
+      final initialPassword = original!;
       final api = Api(base: base!, persistSession: false);
       final secondDevice = Api(base: base, persistSession: false);
       addTearDown(api.dispose);
@@ -48,24 +49,26 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final random = Random.secure();
-      final replacement = List.generate(
-        24,
-        (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-      ).join();
-      await tester.runAsync(() => secondDevice.signInAdmin(original!));
+      final replacement = String.fromCharCode(65 + random.nextInt(26));
+      await tester.runAsync(() => secondDevice.signInAdmin(initialPassword));
       expect(secondDevice.account?.role, 'admin');
       await tester.pumpWidget(AdminApp(api: api));
       final loginButton = find.widgetWithText(FilledButton, 'Login');
       final fields = find.byType(EditableText);
       await _waitFor(tester, loginButton);
       expect(fields, findsOneWidget);
-      await tester.enterText(fields, original!);
+      await tester.enterText(fields, initialPassword);
       await tester.tap(loginButton);
       await _waitFor(tester, find.text('Active customers'));
+      final dashboard = await tester.runAsync(
+        () => secondDevice.get('/admin/dashboard'),
+      );
+      expect(dashboard, contains('accounts'));
+      expect(api.account?.id, secondDevice.account?.id);
       await tester.tap(find.widgetWithText(OutlinedButton, 'Settings'));
       await tester.pumpAndSettle();
       expect(fields, findsNWidgets(3));
-      await tester.enterText(fields.at(0), original);
+      await tester.enterText(fields.at(0), initialPassword);
       await tester.enterText(fields.at(1), replacement);
       await tester.enterText(fields.at(2), replacement);
       await tester.tap(find.widgetWithText(FilledButton, 'Change Password'));
@@ -81,7 +84,7 @@ void main() {
         return 200;
       });
       expect(previousStatus, 401);
-      await tester.enterText(fields, original);
+      await tester.enterText(fields, initialPassword);
       await tester.tap(loginButton);
       await tester.pump();
       await _waitFor(

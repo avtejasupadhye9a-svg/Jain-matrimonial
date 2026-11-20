@@ -1,5 +1,4 @@
 // ignore_for_file: deprecated_member_use
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:jain_client/jain_client.dart';
@@ -166,11 +165,8 @@ class _AdminPasswordSettingsState extends State<AdminPasswordSettings> {
                   controller: next,
                   enabled: !busy,
                   validator: (value) {
-                    if (value == null ||
-                        value.trim().isEmpty ||
-                        value.runes.length < 20 ||
-                        utf8.encode(value).length > 256) {
-                      return 'Use at least 20 characters and at most 256 UTF-8 bytes.';
+                    if (value == null || value.isEmpty) {
+                      return 'Enter the password.';
                     }
                     if (value == current.text) {
                       return 'Choose a different password.';

@@ -154,7 +154,7 @@ void main() {
       for (final field in tester.widgetList<EditableText>(fields)) {
         expect(field.obscureText, isTrue);
       }
-      final next = List.filled(23, 'x').join();
+      const next = 'x';
       await tester.enterText(fields.at(0), sample);
       await tester.enterText(fields.at(1), next);
       await tester.enterText(fields.at(2), sample);

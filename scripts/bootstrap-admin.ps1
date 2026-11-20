@@ -80,17 +80,11 @@ try {
         throw 'Production setup cancelled.'
     }
 
-    $password = Read-HiddenText 'Initial password, at least 20 characters'
+    $password = Read-HiddenText 'Initial password'
     $confirmation = Read-HiddenText 'Confirm initial password'
     if ($password -cne $confirmation) { throw 'The passwords do not match.' }
     $utf8 = [Text.UTF8Encoding]::new($false, $true)
-    try { $passwordSize = $utf8.GetByteCount($password) }
-    catch { throw 'Enter a valid Unicode password.' }
-    if ([string]::IsNullOrWhiteSpace($password) -or $passwordSize -gt 256 -or
-        [regex]::Matches($password, '[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\uD800-\uDFFF]').Count -lt 20 -or
-        $password -match '[\u0000-\u001f\u007f]') {
-        throw 'Use at least 20 characters and at most 256 UTF-8 bytes, without control characters.'
-    }
+    if ([string]::IsNullOrEmpty($password)) { throw 'Enter a password.' }
     $pepper = Read-HiddenText 'Matching Worker ADMIN_PASSWORD_PEPPER (64 lowercase hex characters)'
     if ($pepper -cnotmatch '^[a-f0-9]{64}$') { throw 'Enter the 64-character lowercase hex Worker pepper.' }
     $passwordBytes = $utf8.GetBytes($password)

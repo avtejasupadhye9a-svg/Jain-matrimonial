@@ -53,20 +53,9 @@ async function derive(env: Env, password: string, salt: string) {
   );
 }
 
-function passwordField(value: unknown, field: string, minimum = 1): string {
-  if (
-    typeof value !== 'string' ||
-    [...value].length < minimum ||
-    encoding.encode(value).length > 256 ||
-    /[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value) ||
-    !value.trim()
-  )
-    return invalid(
-      field,
-      minimum > 1
-        ? 'Use at least 20 characters and at most 256 UTF-8 bytes, without control characters.'
-        : 'Enter the password.',
-    );
+function passwordField(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.length || /[\ud800-\udfff]/u.test(value))
+    return invalid(field, 'Enter a password.');
   return value;
 }
 
@@ -105,7 +94,7 @@ export async function login(context: AuthContext, input: JsonObject) {
 export async function changePassword(env: Env, actor: Actor, input: JsonObject) {
   await rate(env.DB_MAIN, 'admin-password-change:' + actor.id, 6, 600);
   const current = passwordField(input.currentPassword, 'currentPassword');
-  const next = passwordField(input.newPassword, 'newPassword', 20);
+  const next = passwordField(input.newPassword, 'newPassword');
   if (next !== input.confirmPassword) return invalid('confirmPassword', 'The new passwords do not match.');
   if (next === current) return invalid('newPassword', 'Choose a different password.');
   const saved = await credential(env, actor.sessionId);
